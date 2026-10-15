@@ -1,0 +1,210 @@
+---
+title: "Local Development Setup for Examwizards"
+sidebarTitle: "Local Development"
+description: "Run Examwizards locally via Docker Compose or individual services. Covers JDK/Node prerequisites, startup, port map, health checks, and dev task recipes."
+---
+
+Examwizards is composed of four services — a MySQL 8 database, a Spring Boot API, a Node.js Gemini chatbot, and a React (Vite) frontend. Docker Compose orchestrates all four with a single command and is the recommended approach for local development. You can also run each service individually if you need faster iteration cycles or already have MySQL installed locally.
+
+## Prerequisites
+
+Ensure the following tools are installed before continuing. Versions below are the minimum tested; newer patch releases are fine.
+
+| Tool | Required version | Notes |
+|---|---|---|
+| JDK (Eclipse Temurin or similar) | 17 | Required only when running the backend outside Docker |
+| Node.js | 20 | Required for frontend and chatbot outside Docker |
+| Docker Desktop | Latest stable | Includes Compose v2 (`docker compose`) |
+| MySQL 8 | 8.0 | Required only when **not** using Docker Compose |
+
+<Note>
+  The Docker Compose stack ships its own MySQL 8 container (`examport-mysql`), so you do **not** need a local MySQL installation when using the Compose approach.
+</Note>
+
+## Docker Compose (Recommended)
+
+Docker Compose starts MySQL, the Spring Boot backend, the Gemini chatbot, and the Vite-built frontend together in an isolated `examport-network` bridge. The `backend` service waits for MySQL to pass a `mysqladmin ping` health check before starting.
+
+<Steps>
+  <Step title="Copy and populate the environment file">
+    ```bash
+    cp .env.example .env
+    ```
+    Open `.env` and fill in every required value. At minimum you need `DB_PASSWORD`, `JWT_SECRET`, `EMAIL_USERNAME`, `EMAIL_PASSWORD`, `EMAIL_FROM`, `GENAI_API_KEY`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and the three `EW_BOOTSTRAP_ADMIN_*` variables. See [Environment Variables](/configuration/environment-variables) for a full reference.
+  </Step>
+
+  <Step title="Build images and start all services">
+    ```bash
+    docker compose up -d
+    ```
+    On first run Docker builds three images (backend, chatbot, frontend) from their respective `Dockerfile`s using multi-stage builds. Subsequent starts reuse the cached layers unless source files change.
+  </Step>
+
+  <Step title="Verify service ports">
+    Once all containers report as healthy, the following ports are bound on `localhost`:
+
+    | Service | Port | Container name |
+    |---|---|---|
+    | MySQL 8 | 3306 | `examport-mysql` |
+    | Spring Boot API | 8080 | `examport-backend` |
+    | Gemini chatbot | 5000 | `examport-chatbot` |
+    | React frontend | 3000 | `examport-frontend` |
+
+    Open [http://localhost:3000](http://localhost:3000) in your browser to access the application.
+  </Step>
+
+  <Step title="Run a health check against the API">
+    Confirm the backend started correctly and can reach the database:
+    ```bash
+    curl http://localhost:8080/api/auth/health
+    ```
+    A `200 OK` response (or a JSON body indicating the service is up) means the API and MySQL are connected. The `/api/auth/health` endpoint is listed as `.permitAll()` in `SecurityConfig`, so no token is needed.
+  </Step>
+
+  <Step title="Stop all services">
+    ```bash
+    docker compose down
+    ```
+    This stops and removes containers and the internal network, but **preserves** the `mysql-data` and `backend-logs` named volumes. Your database state survives across restarts.
+  </Step>
+</Steps>
+
+## Running Services Individually
+
+Use this approach when you want live-reload on the backend or frontend without rebuilding Docker images. You will need a locally accessible MySQL 8 instance (or keep only the `mysql` container running from Compose with `docker compose up -d mysql`).
+
+<Tabs>
+  <Tab title="Backend">
+    The backend is a standard Maven project. The Maven Wrapper (`mvnw`) is included, so no separate Maven installation is needed.
+
+    ```bash
+    cd backend
+    ./mvnw spring-boot:run
+    ```
+
+    The API starts on `http://localhost:8080`. Spring Boot reads all `${ENV_VAR}` placeholders in `application.properties` from your shell environment or a `.env` file loaded by your IDE. Export the minimum required variables before running:
+
+    ```bash
+    export DB_URL=jdbc:mysql://localhost:3306/examwizards
+    export DB_USERNAME=examport
+    export DB_PASSWORD=your-database-password
+    export JWT_SECRET=your-jwt-secret-at-least-32-chars
+    export EMAIL_USERNAME=your-gmail@gmail.com
+    export EMAIL_PASSWORD=your-app-password
+    export EMAIL_FROM="ExamWizards <noreply@examwizards.com>"
+    export EMAIL_ENABLED=true
+    export RAZORPAY_KEY_ID=rzp_test_xxxxx
+    export RAZORPAY_KEY_SECRET=your-razorpay-secret
+    export GENAI_API_KEY=your-gemini-key
+    export EW_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+    export EW_BOOTSTRAP_ADMIN_PASSWORD=AdminPass123!
+    export EW_BOOTSTRAP_ADMIN_USERNAME=admin
+    ```
+
+    <Note>
+      `application.properties` sets `spring.jpa.hibernate.ddl-auto=validate`. Hibernate validates entity-to-column mapping at startup but does not create or modify tables. Apply the schema manually using `backend/src/main/resources/db/manual/examwizards_full_schema_mysql8.sql` against a fresh database before the first run.
+    </Note>
+  </Tab>
+
+  <Tab title="Frontend">
+    The React app uses Vite's dev server with hot module replacement (HMR). Install dependencies first, then start the dev server.
+
+    ```bash
+    cd frontend
+    npm ci
+    npm run dev
+    ```
+
+    Vite reads `.env` files in the `frontend/` directory at dev-server startup (not build time). Create `frontend/.env.local` with the Vite-prefixed variables:
+
+    ```bash
+    VITE_API_BASE_URL=http://localhost:8080/api
+    VITE_CHATBOT_API_URL=http://localhost:5000
+    ```
+
+    The dev server starts on `http://localhost:5173` by default (Vite's default port). The `CORS_ALLOWED_ORIGINS` default in `application.properties` already includes `http://localhost:5173`, so no extra backend config is needed.
+  </Tab>
+
+  <Tab title="Chatbot">
+    The chatbot is a plain Node.js Express server (`chatbot/server.js`) that wraps the Google Gemini API. It exposes `POST /api/ask` for chat completions and `GET /health` for liveness checks.
+
+    ```bash
+    cd chatbot
+    npm ci
+    node server.js
+    ```
+
+    Set `GENAI_API_KEY` before starting:
+
+    ```bash
+    export GENAI_API_KEY=your-gemini-api-key
+    export PORT=5000
+    node server.js
+    ```
+
+    The service listens on `http://localhost:5000`. The `PORT` variable defaults to `5000` in the Docker image (`ENV PORT 5000` in `chatbot/Dockerfile`) but can be overridden when running outside Docker.
+  </Tab>
+</Tabs>
+
+## Common Development Tasks
+
+These commands are useful day-to-day when iterating with the Compose stack.
+
+<Accordion title="Rebuild a single service after a source change">
+  Rebuild and restart only the backend without touching MySQL, the chatbot, or the frontend:
+
+  ```bash
+  docker compose up -d --build backend
+  ```
+
+  Replace `backend` with `frontend` or `chatbot` to rebuild those services instead.
+</Accordion>
+
+<Accordion title="Stream logs from a running service">
+  Follow the backend log output in real time:
+
+  ```bash
+  docker compose logs -f backend
+  ```
+
+  Combine multiple services in one stream:
+
+  ```bash
+  docker compose logs -f backend chatbot
+  ```
+
+  Log files are also written to the `backend-logs` named volume at `/app/logs/examport.log` inside the container (10 MB rolling, 30-day history).
+</Accordion>
+
+<Accordion title="Reset the database (wipe all data)">
+  Stop all containers **and** remove the named volumes, including `mysql-data`:
+
+  ```bash
+  docker compose down -v
+  ```
+
+  The next `docker compose up -d` will re-initialise an empty MySQL instance. `DefaultAdminBootstrap` will re-seed the admin user from your `EW_BOOTSTRAP_ADMIN_*` variables on the backend's first startup.
+
+  <Warning>
+    `docker compose down -v` permanently deletes all data stored in named volumes. Do not run this against any environment where the database content matters.
+  </Warning>
+</Accordion>
+
+<Accordion title="Run backend tests">
+  Unit and integration tests are run via Maven Wrapper from the `backend/` directory:
+
+  ```bash
+  cd backend
+  ./mvnw test
+  ```
+
+  Tests that require a database will need the same environment variables to be set, or a running MySQL container accessible on `localhost:3306`.
+</Accordion>
+
+<Note>
+  The default `application.properties` sets `spring.jpa.hibernate.ddl-auto=validate` and disables Flyway (`spring.flyway.enabled=false`). This means Hibernate only validates the schema at startup and never modifies it. For production, re-enable Flyway and use the versioned migrations under `backend/src/main/resources/db/migration/` (`V1__` through `V4__` are already in the repository) instead of relying on manual SQL scripts.
+</Note>
+
+<Tip>
+  For frontend-only work (UI changes that do not touch the API), deploy the frontend to **Vercel** and point `VITE_API_BASE_URL` at a shared development API endpoint. Vercel's preview deployments give each pull request a unique URL, making it easy to share UI changes for review without spinning up a full local stack.
+</Tip>

@@ -1,0 +1,190 @@
+---
+title: "Authentication: JWT, Email Verification, and Password Reset"
+sidebarTitle: "Authentication"
+description: "Examwizards uses stateless JWT sessions, BCrypt password hashing, mandatory email verification, and a token-based password reset flow to secure every account."
+---
+
+Examwizards handles authentication entirely on the server side using HS256-signed JWTs issued by Spring Boot. No session state is stored — every request carries its own token in the `Authorization` header. Passwords are stored as BCrypt hashes, and every new account must pass an email verification step before the first login is allowed. The public registration endpoint accepts only `student` and `instructor` roles; the `admin` role cannot be created through self-service registration.
+
+## How JWT Authentication Works
+
+When a user logs in, the backend calls `JwtUtil.generateToken(username, role)` and signs the resulting HS256 token with `JWT_SECRET`. The frontend stores the token and attaches it to every subsequent API request. The Spring Security filter chain validates the signature and populates the `SecurityContext` on each request — no database round-trip is needed to verify identity.
+
+<CardGroup cols={3}>
+  <Card title="Algorithm" icon="lock">
+    HMAC-SHA256 (HS256) — symmetric signature using `JWT_SECRET`
+  </Card>
+  <Card title="Password Storage" icon="shield">
+    BCrypt via `BCryptPasswordEncoder` — no plain-text ever persisted
+  </Card>
+  <Card title="Email Guard" icon="envelope">
+    `emailVerified = false` on creation — login blocked until verified
+  </Card>
+</CardGroup>
+
+## Registration
+
+New users call `POST /api/auth/register` with a JSON body. The server validates the role, checks for duplicate username, email, and phone number, hashes the password with BCrypt, persists the user with `emailVerified = false`, and sends a verification email.
+
+<Warning>
+  Attempting to register with `"role": "admin"` returns HTTP 400. Admin accounts can only be created directly by a system administrator.
+</Warning>
+
+```bash
+curl -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "jane_doe",
+    "email": "jane@example.com",
+    "password": "secret123",
+    "fullName": "Jane Doe",
+    "phoneNumber": "9876543210",
+    "gender": "female",
+    "role": "student"
+  }'
+```
+
+**Successful response (HTTP 200):**
+
+```json
+{
+  "username": "jane_doe",
+  "role": "student",
+  "fullName": "Jane Doe",
+  "emailVerified": false,
+  "verificationEmailSent": true,
+  "message": "Registration successful! Please check your email to verify your account before logging in."
+}
+```
+
+## Email Verification
+
+After registration the user receives a link containing a one-time token. Clicking it (or calling the endpoint directly) marks the account as verified.
+
+```bash
+curl "http://localhost:8080/api/auth/verify-email?token=<verification_token>"
+```
+
+**Successful response (HTTP 200):**
+
+```json
+{
+  "success": true,
+  "message": "Email verified successfully! You can now log in to your account."
+}
+```
+
+If the token is invalid or expired the server returns HTTP 400 with `"success": false`.
+
+### Resend Verification Email
+
+If the verification email was lost or expired, the user can request a new one:
+
+```bash
+curl -X POST http://localhost:8080/api/auth/resend-verification \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "jane@example.com" }'
+```
+
+```json
+{
+  "success": true,
+  "message": "Verification email sent successfully! Please check your inbox."
+}
+```
+
+## Login
+
+Once the email is verified, the user authenticates with their username **or** email. The server looks up the account by username first, falls back to email, checks the BCrypt hash, confirms `emailVerified = true`, and returns a signed JWT.
+
+<Warning>
+  If `emailVerified` is `false`, the server returns HTTP 403 with an error asking the user to verify their email. Login is not possible until verification is complete.
+</Warning>
+
+```bash
+curl -X POST http://localhost:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "jane_doe",
+    "password": "secret123"
+  }'
+```
+
+**Successful response (HTTP 200):**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiJ9...",
+  "username": "jane_doe",
+  "role": "student",
+  "fullName": "Jane Doe",
+  "emailVerified": true,
+  "timestamp": 1720000000000
+}
+```
+
+## Using the JWT
+
+Include the token returned by `/api/auth/login` in the `Authorization` header of every authenticated request:
+
+```bash
+curl http://localhost:8080/api/courses/public \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9..."
+```
+
+<Note>
+  When the token expires the server returns HTTP 401. The client must redirect to the login screen and obtain a fresh token — there is no silent refresh flow.
+</Note>
+
+## Password Reset
+
+Password reset is a two-step process: first request a reset link, then submit the new password with the token from that link.
+
+### Step 1 — Request a Reset Link
+
+```bash
+curl -X POST http://localhost:8080/api/auth/request-password-reset \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "jane@example.com" }'
+```
+
+```json
+{
+  "success": true,
+  "message": "Password reset link has been sent to your email address."
+}
+```
+
+### Step 2 — Submit the New Password
+
+```bash
+curl -X POST http://localhost:8080/api/auth/reset-password \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token": "<reset_token_from_email>",
+    "newPassword": "newSecret456"
+  }'
+```
+
+```json
+{
+  "success": true,
+  "message": "Password reset successfully! You can now log in with your new password."
+}
+```
+
+<Note>
+  The new password must be at least 6 characters long. Tokens that are invalid or already used return HTTP 400.
+</Note>
+
+## Endpoint Reference
+
+| Method | Path | Auth Required | Description |
+|--------|------|---------------|-------------|
+| `POST` | `/api/auth/register` | No | Create a student or instructor account |
+| `GET` | `/api/auth/verify-email?token=` | No | Verify email address |
+| `POST` | `/api/auth/resend-verification` | No | Resend verification email |
+| `POST` | `/api/auth/login` | No | Log in and receive a JWT |
+| `POST` | `/api/auth/request-password-reset` | No | Send a password reset email |
+| `POST` | `/api/auth/reset-password` | No | Set a new password with reset token |
+| `GET` | `/api/auth/health` | No | Auth service health check |

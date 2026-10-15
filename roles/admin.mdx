@@ -1,0 +1,268 @@
+---
+title: "Admin Role: Platform Management and User Oversight"
+sidebarTitle: "Admin"
+description: "Explains how the admin account is bootstrapped, what the admin dashboard reports, and how admins manage users, moderate reviews, and respond to contact requests across the platform."
+---
+
+The admin role has full visibility across the Examwizards platform. Admins can inspect platform-wide statistics, manage all registered users (including hard-deleting accounts with cascade safety), moderate student and instructor reviews before they appear publicly, and respond to contact messages submitted through the platform's contact form. Unlike students and instructors, admin accounts are never self-registered — they are created by the platform at first startup using environment variables.
+
+## Admin Account Bootstrapping
+
+Admin accounts cannot be created through the public registration form. The `POST /api/auth/register` endpoint explicitly rejects `role: "admin"` payloads. Instead, the `DefaultAdminBootstrap` component runs at application startup (`@Order(2)`) and creates a single admin user if none exists in the database:
+
+```java
+// DefaultAdminBootstrap.java — runs once on first startup
+@Value("${EW_BOOTSTRAP_ADMIN_EMAIL}")
+private String adminEmail;
+
+@Value("${EW_BOOTSTRAP_ADMIN_PASSWORD}")
+private String adminPassword;
+
+@Value("${EW_BOOTSTRAP_ADMIN_USERNAME}")
+private String adminUsername;
+```
+
+Set these three variables in your `.env` file (or as ECS task-definition secrets in production) before the first container start:
+
+```bash
+EW_BOOTSTRAP_ADMIN_EMAIL=admin@yourorganisation.com
+EW_BOOTSTRAP_ADMIN_PASSWORD=a-strong-secret-password
+EW_BOOTSTRAP_ADMIN_USERNAME=platformadmin
+```
+
+<Note>
+  Bootstrap is idempotent. If an admin-role user already exists, the component skips silently. If the email or username is already taken by a non-admin account, it logs a warning and skips — no existing account is modified.
+</Note>
+
+## Admin Dashboard
+
+The dashboard aggregates real-time platform counts queried directly from the database.
+
+```http
+GET /api/admin/dashboard
+Authorization: Bearer <token>   # must carry ROLE_ADMIN
+```
+
+### Response shape
+
+```json
+{
+  "totalUsers": 138,
+  "stats": {
+    "totalExams": 22,
+    "completedExams": 314,
+    "averageScore": 76.83,
+    "rank": 0
+  },
+  "usersByRole": [
+    { "name": "Students",    "value": 120, "color": "#8B5CF6" },
+    { "name": "Instructors", "value": 15,  "color": "#06B6D4" },
+    { "name": "Admins",      "value": 3,   "color": "#10B981" }
+  ],
+  "upcomingExams":   [],
+  "recentResults":   [],
+  "performanceData": []
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `totalUsers` | number | All registered users across all roles |
+| `stats.totalExams` | number | Total exam records in the platform |
+| `stats.completedExams` | number | Total result submissions (exam attempts) |
+| `stats.averageScore` | number | Mean score across all result records |
+| `usersByRole` | array | Per-role user counts with chart colour hints |
+
+<Info>
+  The dashboard also exposes a lightweight `GET /api/admin/simple-dashboard` endpoint that returns static sample data. Use it for UI smoke tests without a database connection.
+</Info>
+
+## User Management
+
+All user-management endpoints live under `/api/admin/users` and are gated by `hasRole('ADMIN')` in the Spring Security filter chain.
+
+### List all users
+
+```http
+GET /api/admin/users
+Authorization: Bearer <token>
+```
+
+Returns an array of user objects, each containing `id`, `username`, `email`, `role`, `fullName`, `phoneNumber`, and `status` (`"active"` for email-verified accounts, `"inactive"` otherwise).
+
+### User statistics
+
+```http
+GET /api/admin/users/stats
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "totalUsers": 138,
+  "adminCount": 3,
+  "instructorCount": 15,
+  "studentCount": 120
+}
+```
+
+### Preview deletion impact
+
+Before removing a user, call the impact endpoint to understand what will be cascade-deleted:
+
+```http
+GET /api/admin/users/{userId}/deletion-impact
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "success": true,
+  "impact": {
+    "userId": 42,
+    "username": "john_doe",
+    "email": "john@example.com",
+    "verificationTokens": 1,
+    "enrollments": 5,
+    "results": 12,
+    "courses": 0
+  }
+}
+```
+
+### Delete a user
+
+```http
+DELETE /api/admin/users/{userId}
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "success": true,
+  "message": "User and all related data deleted successfully",
+  "deletionImpact": {
+    "verificationTokens": 1,
+    "enrollments": 5,
+    "results": 12,
+    "courses": 0
+  }
+}
+```
+
+<Warning>
+  Deleting a user is **irreversible** and cascades to all related data. The `UserManagementService.deleteUserSafely(userId)` method removes the user's verification tokens, enrollment records, exam results, and any courses they owned as an instructor. Always call `GET /api/admin/users/{userId}/deletion-impact` first to review the full scope before confirming the delete.
+</Warning>
+
+## Review Moderation
+
+Student and instructor reviews are held in a `PENDING` state after submission and are never visible publicly until an admin approves them. Moderation endpoints are secured with `@PreAuthorize("hasRole('ROLE_ADMIN')")`.
+
+### Fetch pending reviews
+
+```http
+GET /api/reviews/pending?page=0&size=10
+Authorization: Bearer <token>
+```
+
+Returns a paginated list of reviews awaiting moderation, each with `id`, `content`, `rating`, and the submitting user's details.
+
+### Approve a review
+
+```http
+POST /api/reviews/{reviewId}/approve
+Authorization: Bearer <token>
+```
+
+Transitions the review to `APPROVED` status. It becomes visible on `GET /api/reviews/public` and `GET /api/reviews/recent` (used by the landing page).
+
+### Reject a review
+
+```http
+POST /api/reviews/{reviewId}/reject
+Authorization: Bearer <token>
+```
+
+Marks the review as `REJECTED`. It is removed from the public feed and is not shown to other users.
+
+## Contact Message Inbox
+
+Users and visitors can submit contact messages via `POST /api/contact` (a public endpoint, no authentication required). Admins manage these messages through a dedicated inbox under `/api/contact/admin/`.
+
+### List messages
+
+```http
+GET /api/contact/admin/messages?page=0&size=10&sortBy=submittedAt&sortDir=desc
+Authorization: Bearer <token>
+```
+
+Supports optional query filters: `email`, `status` (`PENDING` | `IN_PROGRESS` | `REPLIED`), `startDate`, `endDate`, `referenceNumber`, and `searchTerm`.
+
+### View a single message
+
+```http
+GET /api/contact/admin/messages/{id}
+Authorization: Bearer <token>
+```
+
+### Update status and add a response
+
+```http
+PUT /api/contact/admin/messages/{id}/status
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "status": "REPLIED",
+  "adminResponse": "Thank you for reaching out. We have resolved the issue you described."
+}
+```
+
+Valid `status` values are `PENDING`, `IN_PROGRESS`, and `REPLIED`.
+
+### Inbox statistics
+
+```http
+GET /api/contact/admin/stats
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "success": true,
+  "stats": {
+    "pending": 7,
+    "inProgress": 2,
+    "replied": 43,
+    "recentMessages": [ ... ]
+  }
+}
+```
+
+### Delete a message
+
+```http
+DELETE /api/contact/admin/messages/{id}
+Authorization: Bearer <token>
+```
+
+## System Analytics in the React SPA
+
+The React 18 frontend includes a dedicated analytics page under the admin dashboard route. It renders the `usersByRole` pie chart, the platform-wide exam and result counts, and the average score from `GET /api/admin/dashboard`. The frontend only shows this route to users whose JWT payload carries the `admin` role claim — other roles are redirected to their own dashboard on navigation.
+
+## Related Pages
+
+<CardGroup cols={2}>
+  <Card title="Admin API Reference" icon="code" href="/api/admin">
+    Full REST reference for all `/api/admin/**` endpoints including dashboard, user management, and stats.
+  </Card>
+  <Card title="Environment Variables" icon="sliders" href="/configuration/environment-variables">
+    Complete list of all `.env` variables including the three bootstrap admin credentials and their default behaviour.
+  </Card>
+  <Card title="Authentication" icon="lock" href="/features/authentication">
+    JWT flow, email verification, and how roles are embedded in the token payload and enforced by Spring Security.
+  </Card>
+  <Card title="Student Role" icon="user-graduate" href="/roles/student">
+    Student dashboard, exam access, results, and leaderboard — useful context when investigating student-reported issues.
+  </Card>
+</CardGroup>

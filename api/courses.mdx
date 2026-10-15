@@ -1,0 +1,437 @@
+---
+title: "Courses API: Create, List, and Manage Course Endpoints"
+sidebarTitle: "Courses"
+description: "Full reference for all /api/courses endpoints including course creation with CSV access lists, public listing, enrollment, Razorpay payment initiation, and instructor management."
+---
+
+The Courses API powers the full lifecycle of learning content on Examwizards — from an unauthenticated visitor browsing the catalogue to an instructor publishing a private paid course with a curated student list. Courses have two visibility states (`PUBLIC` / `PRIVATE`) and two pricing modes (`FREE` / `PAID`). Private courses require an uploaded CSV of allowed email addresses; public paid courses use Razorpay for payment and auto-enroll on verified payment.
+
+---
+
+## GET /api/courses/public
+
+Returns all `PUBLIC` visibility courses with per-course enrollment counts and instructor details. No authentication is required — this endpoint is safe to call from unauthenticated landing pages.
+
+**Auth**: Public — no token required.
+
+**Response** `200 OK` — array of course objects.
+
+<ResponseField name="id" type="number">
+  Unique course identifier.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Course title.
+</ResponseField>
+<ResponseField name="description" type="string">
+  Course description, may be `null`.
+</ResponseField>
+<ResponseField name="visibility" type="string">
+  Always `"PUBLIC"` for this endpoint.
+</ResponseField>
+<ResponseField name="pricing" type="string">
+  `"FREE"` or `"PAID"`.
+</ResponseField>
+<ResponseField name="price" type="number">
+  Decimal price in INR for paid courses; `null` for free courses.
+</ResponseField>
+<ResponseField name="enrollmentCount" type="number">
+  Total number of currently enrolled students.
+</ResponseField>
+<ResponseField name="instructor" type="object">
+  Object containing `id`, `username`, and `fullName` of the course creator.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/courses/public
+```
+
+---
+
+## GET /api/courses/{id}
+
+Fetches a single course by its numeric ID. Works for both public and private courses; access control for content within the course is handled separately via the `/access` endpoint.
+
+**Auth**: Public — no token required.
+
+**Response** `200 OK` — full `Course` entity.
+
+<ResponseField name="id" type="number">
+  Course identifier.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Course title.
+</ResponseField>
+<ResponseField name="description" type="string">
+  Course description.
+</ResponseField>
+<ResponseField name="visibility" type="string">
+  `"PUBLIC"` or `"PRIVATE"`.
+</ResponseField>
+<ResponseField name="pricing" type="string">
+  `"FREE"` or `"PAID"`.
+</ResponseField>
+<ResponseField name="price" type="number">
+  Price in INR, or `null`.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/courses/42
+```
+
+---
+
+## POST /api/courses/create
+
+Creates a new course owned by the authenticated instructor. Uses `multipart/form-data` because private courses optionally accept a CSV file of allowed student emails. Students whose emails appear in the file and already have accounts are auto-enrolled immediately.
+
+**Auth**: Bearer JWT — INSTRUCTOR role required.
+
+<ParamField body="name" type="string" required>
+  Course title displayed to students.
+</ParamField>
+<ParamField body="description" type="string">
+  Optional course description.
+</ParamField>
+<ParamField body="visibility" type="string" required>
+  `"PUBLIC"` or `"PRIVATE"` (case-insensitive).
+</ParamField>
+<ParamField body="pricing" type="string" required>
+  `"FREE"` or `"PAID"` (case-insensitive).
+</ParamField>
+<ParamField body="price" type="string">
+  Decimal price string (e.g. `"499.00"`) for `PAID` courses. Omit or leave blank for free courses.
+</ParamField>
+<ParamField body="file" type="file">
+  **Required for `PRIVATE` courses.** A plain-text CSV/TXT file with one email address per line. Each address is validated and existing users are auto-enrolled.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="id" type="number">
+  ID of the newly created course.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Saved course name.
+</ResponseField>
+<ResponseField name="visibility" type="string">
+  Saved visibility value.
+</ResponseField>
+<ResponseField name="pricing" type="string">
+  Saved pricing value.
+</ResponseField>
+<ResponseField name="price" type="number">
+  Saved price, or `null`.
+</ResponseField>
+<ResponseField name="instructor" type="object">
+  `id`, `username`, and `fullName` of the creating instructor.
+</ResponseField>
+<ResponseField name="message" type="string">
+  Success confirmation.
+</ResponseField>
+<ResponseField name="autoEnrolledStudents" type="number">
+  Present for private courses — count of students auto-enrolled from the CSV.
+</ResponseField>
+
+```bash
+# Public free course
+curl -X POST http://localhost:8080/api/courses/create \
+  -H 'Authorization: Bearer <token>' \
+  -F 'name=Intro to Java' \
+  -F 'description=Beginner Java programming' \
+  -F 'visibility=PUBLIC' \
+  -F 'pricing=FREE'
+
+# Private paid course with allowed-emails file
+curl -X POST http://localhost:8080/api/courses/create \
+  -H 'Authorization: Bearer <token>' \
+  -F 'name=Advanced Spring Boot' \
+  -F 'visibility=PRIVATE' \
+  -F 'pricing=PAID' \
+  -F 'price=999.00' \
+  -F 'file=@/path/to/emails.txt'
+```
+
+---
+
+## GET /api/courses/instructor
+
+Returns all courses owned by the authenticated instructor enriched with enrollment counts, exam counts, and (for private courses) the number of allowed email addresses.
+
+**Auth**: Bearer JWT — INSTRUCTOR role required.
+
+**Response** `200 OK` — array of course objects with stats.
+
+<ResponseField name="id" type="number">
+  Course identifier.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Course title.
+</ResponseField>
+<ResponseField name="enrollmentCount" type="number">
+  Number of currently enrolled students.
+</ResponseField>
+<ResponseField name="examCount" type="number">
+  Number of exams linked to this course.
+</ResponseField>
+<ResponseField name="allowedEmailsCount" type="number">
+  Private courses only — number of email entries in the access list.
+</ResponseField>
+<ResponseField name="instructor" type="object">
+  `id`, `username`, and `fullName`.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/courses/instructor \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/courses/student/enrolled
+
+Returns the list of courses in which the authenticated student is currently enrolled (status `ENROLLED`). Includes enrollment timestamp and basic instructor information.
+
+**Auth**: Bearer JWT — STUDENT role required.
+
+**Response** `200 OK` — array of enrolled course objects.
+
+<ResponseField name="id" type="number">
+  Course identifier.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Course title.
+</ResponseField>
+<ResponseField name="enrollmentDate" type="string">
+  ISO-8601 timestamp of when the student enrolled.
+</ResponseField>
+<ResponseField name="pricing" type="string">
+  `"FREE"` or `"PAID"`.
+</ResponseField>
+<ResponseField name="instructor" type="object">
+  `username` and `fullName` of the course instructor.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/courses/student/enrolled \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/courses/{courseId}/access
+
+Checks whether the authenticated user has access to a specific course. For public courses this means having an active enrollment; for private courses it additionally checks the allowed-emails list.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK`
+
+<ResponseField name="hasAccess" type="boolean">
+  `true` if the user may view and take exams in this course.
+</ResponseField>
+<ResponseField name="accessType" type="string">
+  `"enrolled"`, `"allowed_email"`, or `"none"`.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/courses/42/access \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## POST /api/courses/{courseId}/enroll
+
+Enrolls the authenticated student in a **public, free** course. Returns `400` for private or paid courses — use `/purchase` for paid courses instead.
+
+**Auth**: Bearer JWT — STUDENT role required.
+
+**Response** `200 OK`
+
+<ResponseField name="message" type="string">
+  `"Successfully enrolled in course"`.
+</ResponseField>
+<ResponseField name="courseId" type="number">
+  ID of the course that was enrolled in.
+</ResponseField>
+<ResponseField name="courseName" type="string">
+  Name of the course.
+</ResponseField>
+<ResponseField name="enrollmentId" type="number">
+  Newly created enrollment record ID.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:8080/api/courses/42/enroll \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## POST /api/courses/{courseId}/purchase
+
+Initiates a Razorpay payment order for a **public, paid** course. Returns the Razorpay `orderId`, `amount` (in paise), and `currency` needed by the frontend SDK. After the user completes payment, call `/payment/verify` to confirm enrollment.
+
+**Auth**: Bearer JWT — STUDENT role required.
+
+**Response** `200 OK`
+
+<ResponseField name="orderId" type="string">
+  Razorpay order ID (prefix `order_`). Pass to the Razorpay checkout widget.
+</ResponseField>
+<ResponseField name="amount" type="number">
+  Amount in paise (e.g., `49900` for ₹499.00).
+</ResponseField>
+<ResponseField name="currency" type="string">
+  Always `"INR"`.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:8080/api/courses/42/purchase \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## POST /api/courses/payment/verify
+
+Verifies a completed Razorpay payment using HMAC-SHA256 signature validation and enrolls the student on success. All four fields are required; a signature mismatch returns `422 Unprocessable Entity`.
+
+**Auth**: Bearer JWT — STUDENT role required.
+
+<ParamField body="razorpay_order_id" type="string" required>
+  The `orderId` returned by `/purchase`.
+</ParamField>
+<ParamField body="razorpay_payment_id" type="string" required>
+  The `paymentId` returned by the Razorpay checkout callback.
+</ParamField>
+<ParamField body="razorpay_signature" type="string" required>
+  HMAC-SHA256 signature from the Razorpay callback payload.
+</ParamField>
+<ParamField body="courseId" type="number" required>
+  The numeric ID of the course being purchased.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="success" type="boolean">
+  `true` on verified payment and successful enrollment.
+</ResponseField>
+<ResponseField name="message" type="string">
+  Confirmation text.
+</ResponseField>
+<ResponseField name="orderId" type="string">
+  Echoed Razorpay order ID.
+</ResponseField>
+<ResponseField name="paymentId" type="string">
+  Echoed Razorpay payment ID.
+</ResponseField>
+<ResponseField name="courseId" type="number">
+  Echoed course ID.
+</ResponseField>
+<ResponseField name="courseName" type="string">
+  Name of the purchased course.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:8080/api/courses/payment/verify \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "razorpay_order_id": "order_ABC123",
+    "razorpay_payment_id": "pay_XYZ789",
+    "razorpay_signature": "hmac_sig_value",
+    "courseId": 42
+  }'
+```
+
+---
+
+## PUT /api/courses/{courseId}
+
+Updates an existing course owned by the authenticated instructor. Uses `multipart/form-data` for the same reason as creation — a private course update may include a new CSV to replace the allowed-emails list. New students in the updated list who already have accounts are auto-enrolled.
+
+**Auth**: Bearer JWT — INSTRUCTOR role required (must own the course).
+
+<ParamField body="name" type="string" required>
+  Updated course title.
+</ParamField>
+<ParamField body="description" type="string">
+  Updated description.
+</ParamField>
+<ParamField body="visibility" type="string" required>
+  `"PUBLIC"` or `"PRIVATE"`.
+</ParamField>
+<ParamField body="pricing" type="string" required>
+  `"FREE"` or `"PAID"`.
+</ParamField>
+<ParamField body="price" type="string">
+  Updated price string; omit for free courses.
+</ParamField>
+<ParamField body="file" type="file">
+  Optional replacement CSV for private courses. If omitted, the existing allowed-emails list is preserved.
+</ParamField>
+
+**Response** `200 OK` — same shape as `POST /api/courses/create`.
+
+```bash
+curl -X PUT http://localhost:8080/api/courses/42 \
+  -H 'Authorization: Bearer <token>' \
+  -F 'name=Advanced Java Updated' \
+  -F 'visibility=PUBLIC' \
+  -F 'pricing=FREE'
+```
+
+---
+
+## DELETE /api/courses/{courseId}
+
+Deletes a course owned by the authenticated instructor. The request is rejected with `409 Conflict` if the course still has linked exams or active student enrollments — remove those first.
+
+**Auth**: Bearer JWT — INSTRUCTOR role required (must own the course).
+
+**Response** `200 OK`
+
+<ResponseField name="message" type="string">
+  `"Course deleted successfully"`.
+</ResponseField>
+<ResponseField name="deletedCourseId" type="number">
+  ID of the removed course.
+</ResponseField>
+<ResponseField name="deletedCourseName" type="string">
+  Title of the removed course.
+</ResponseField>
+
+```bash
+curl -X DELETE http://localhost:8080/api/courses/42 \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## POST /api/courses/{courseId}/unenroll-all
+
+Removes **all** student enrollments from a course at once. Use this to clear the roster before deleting a course. The instructor must own the course.
+
+**Auth**: Bearer JWT — INSTRUCTOR role required (must own the course).
+
+**Response** `200 OK`
+
+<ResponseField name="message" type="string">
+  Confirmation or "no students enrolled" notice.
+</ResponseField>
+<ResponseField name="unenrolledCount" type="number">
+  Number of enrollment records deleted.
+</ResponseField>
+<ResponseField name="courseName" type="string">
+  Name of the course whose roster was cleared.
+</ResponseField>
+
+<Warning>
+  This action is irreversible. All student enrollment records are permanently deleted. Students will lose access to course exams immediately.
+</Warning>
+
+```bash
+curl -X POST http://localhost:8080/api/courses/42/unenroll-all \
+  -H 'Authorization: Bearer <token>'
+```

@@ -1,0 +1,214 @@
+---
+title: "Enrollments API: Manage Student Course Access"
+sidebarTitle: "Enrollments"
+description: "Reference for all /api/enrollments endpoints: paginated enrollment listing, per-enrollment details, membership checks, cancellation, and instructor-facing course and stats views."
+---
+
+The Enrollments API gives students visibility into every course they belong to and lets them cancel memberships they no longer want. Instructors use it to inspect who is enrolled in their courses and to review aggregated revenue and enrollment stats. All responses enforce ownership — students can only read or cancel their own enrollment records, and instructors can only view data for courses they own.
+
+---
+
+## GET /api/enrollments/my-enrollments
+
+Returns a paginated list of the authenticated user's enrollments, sorted by enrollment date descending by default.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+<ParamField query="page" type="number">
+  Zero-based page number. Default: `0`.
+</ParamField>
+<ParamField query="size" type="number">
+  Number of records per page. Default: `10`.
+</ParamField>
+<ParamField query="sortBy" type="string">
+  Field to sort by. Default: `"enrollmentDate"`.
+</ParamField>
+<ParamField query="sortDir" type="string">
+  `"asc"` or `"desc"`. Default: `"desc"`.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="enrollments" type="array">
+  Page of `Enrollment` objects. Each object includes `id`, `enrollmentDate`, `status`, `course`, and `student` fields.
+</ResponseField>
+<ResponseField name="currentPage" type="number">
+  Zero-based index of the returned page.
+</ResponseField>
+<ResponseField name="totalItems" type="number">
+  Total number of enrollment records for this user across all pages.
+</ResponseField>
+<ResponseField name="totalPages" type="number">
+  Total number of pages at the current `size`.
+</ResponseField>
+<ResponseField name="hasNext" type="boolean">
+  `true` if another page follows.
+</ResponseField>
+<ResponseField name="hasPrevious" type="boolean">
+  `true` if a previous page exists.
+</ResponseField>
+
+```bash
+curl "http://localhost:8080/api/enrollments/my-enrollments?page=0&size=10" \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/enrollments/{enrollmentId}
+
+Returns the details of a single enrollment record. Returns `403 Forbidden` if the record belongs to a different user.
+
+**Auth**: Bearer JWT — any authenticated role (ownership enforced).
+
+**Response** `200 OK` — full `Enrollment` entity.
+
+<ResponseField name="id" type="number">
+  Enrollment record ID.
+</ResponseField>
+<ResponseField name="enrollmentDate" type="string">
+  ISO-8601 timestamp of when the enrollment was created.
+</ResponseField>
+<ResponseField name="status" type="string">
+  Enrollment status, e.g. `"ENROLLED"`.
+</ResponseField>
+<ResponseField name="course" type="object">
+  Embedded course object with `id`, `name`, `visibility`, and `pricing`.
+</ResponseField>
+<ResponseField name="student" type="object">
+  Embedded student object with `id`, `username`, and `email`.
+</ResponseField>
+<ResponseField name="paymentTransactionId" type="string">
+  Razorpay transaction ID for paid enrollments; `null` for free enrollments.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/enrollments/99 \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/enrollments/check/{courseId}
+
+Checks whether the authenticated user is currently enrolled in a given course. Returns the enrollment ID and date if enrolled.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK`
+
+<ResponseField name="isEnrolled" type="boolean">
+  `true` if the user holds an active enrollment for this course.
+</ResponseField>
+<ResponseField name="courseId" type="number">
+  The queried course ID.
+</ResponseField>
+<ResponseField name="enrollmentId" type="number">
+  Present when enrolled — the ID of the enrollment record.
+</ResponseField>
+<ResponseField name="enrollmentDate" type="string">
+  Present when enrolled — ISO-8601 enrollment timestamp.
+</ResponseField>
+<ResponseField name="status" type="string">
+  Present when enrolled — current enrollment status string.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/enrollments/check/42 \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## DELETE /api/enrollments/{enrollmentId}
+
+Cancels an enrollment. Only the student who owns the enrollment may cancel it; attempts by other users return `403 Forbidden`. Cancellation is permanent — to re-enroll the student must go through the normal enroll or purchase flow again.
+
+**Auth**: Bearer JWT — any authenticated role (ownership enforced).
+
+**Response** `200 OK`
+
+<ResponseField name="message" type="string">
+  `"Enrollment cancelled successfully"`.
+</ResponseField>
+<ResponseField name="enrollmentId" type="number">
+  ID of the cancelled enrollment record.
+</ResponseField>
+
+<Warning>
+  Cancelling a paid enrollment does **not** automatically trigger a refund. Handle refunds through the Razorpay dashboard separately if required.
+</Warning>
+
+```bash
+curl -X DELETE http://localhost:8080/api/enrollments/99 \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/enrollments/course/{courseId}
+
+Returns a paginated list of all student enrollments for a specific course. The authenticated user must be the instructor who owns that course.
+
+**Auth**: Bearer JWT — INSTRUCTOR role required (must own the course).
+
+<ParamField query="page" type="number">
+  Zero-based page number. Default: `0`.
+</ParamField>
+<ParamField query="size" type="number">
+  Records per page. Default: `10`.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="enrollments" type="array">
+  Page of enrollment DTOs. Each DTO includes `id`, `enrollmentDate`, `status`, `paymentTransactionId`, and a `student` object with `id`, `username`, `email`, and `fullName`.
+</ResponseField>
+<ResponseField name="currentPage" type="number">
+  Current page index.
+</ResponseField>
+<ResponseField name="totalItems" type="number">
+  Total enrollments for this course across all pages.
+</ResponseField>
+<ResponseField name="totalPages" type="number">
+  Total page count.
+</ResponseField>
+<ResponseField name="hasNext" type="boolean">
+  `true` if a next page exists.
+</ResponseField>
+<ResponseField name="hasPrevious" type="boolean">
+  `true` if a previous page exists.
+</ResponseField>
+
+```bash
+curl "http://localhost:8080/api/enrollments/course/42?page=0&size=20" \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/enrollments/instructor/stats
+
+Returns aggregated enrollment and revenue statistics for all courses owned by the authenticated instructor. The exact fields are computed by `EnrollmentService.getInstructorStats`.
+
+**Auth**: Bearer JWT — INSTRUCTOR role required.
+
+**Response** `200 OK`
+
+<ResponseField name="totalEnrollments" type="number">
+  Sum of all active enrollments across the instructor's courses.
+</ResponseField>
+<ResponseField name="totalRevenue" type="number">
+  Total revenue in INR from paid enrollments.
+</ResponseField>
+<ResponseField name="courseCount" type="number">
+  Number of courses owned by the instructor.
+</ResponseField>
+<ResponseField name="enrollmentsByCourse" type="array">
+  Per-course breakdown, each entry containing `courseId`, `courseName`, and `enrollmentCount`.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/enrollments/instructor/stats \
+  -H 'Authorization: Bearer <token>'
+```

@@ -1,0 +1,125 @@
+{
+  "projectType": "saas",
+  "projectName": "Examwizards",
+  "projectDescription": "A role-based online learning platform where instructors create courses and timed exams, students enroll and take assessments, and admins manage the full lifecycle — built on Spring Boot, React, and deployed to AWS ECS.",
+  "theme": "luma",
+  "primaryColor": "#6c2bd9",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/authentication",
+              "features/courses",
+              "features/exams",
+              "features/enrollments",
+              "features/payments",
+              "features/chatbot"
+            ]
+          },
+          {
+            "group": "Roles & Dashboards",
+            "pages": [
+              "roles/student",
+              "roles/instructor",
+              "roles/admin"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment-variables",
+              "configuration/local-development"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker-compose",
+              "deployment/aws",
+              "deployment/ci-cd"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/auth",
+              "api/courses",
+              "api/exams",
+              "api/enrollments",
+              "api/results",
+              "api/users",
+              "api/admin"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Role-based access control with Student, Instructor, and Admin roles",
+    "Course creation with public/private visibility and Razorpay payment integration",
+    "Timed online exams with auto-grading and results delivery via email",
+    "Student enrollment management with free and paid course support",
+    "AI-powered chatbot using Google Gemini for student assistance",
+    "JWT-based stateless authentication with email verification and password reset",
+    "Admin dashboard with user management, analytics, and review moderation",
+    "Full AWS deployment via Terraform (ECS Fargate, RDS, CloudFront, WAF)",
+    "Multi-stage Docker builds and Docker Compose for local development",
+    "GitHub Actions and optional Jenkins CI/CD pipeline with Terraform plan on PR"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/register",
+    "POST /api/auth/login",
+    "GET /api/auth/verify-email",
+    "POST /api/auth/request-password-reset",
+    "POST /api/auth/reset-password",
+    "GET /api/courses/public",
+    "GET /api/courses/{id}",
+    "POST /api/courses/create",
+    "POST /api/courses/{courseId}/enroll",
+    "POST /api/courses/{courseId}/purchase",
+    "POST /api/courses/payment/verify",
+    "GET /api/exams",
+    "POST /api/exams",
+    "PUT /api/exams/{id}",
+    "POST /api/exams/{id}/submit",
+    "GET /api/enrollments/my-enrollments",
+    "GET /api/enrollments/check/{courseId}",
+    "GET /api/results/me",
+    "GET /api/results/exam/{examId}",
+    "GET /api/users/me",
+    "PUT /api/users/me",
+    "GET /api/admin/dashboard",
+    "GET /api/admin/users",
+    "DELETE /api/admin/users/{userId}",
+    "GET /api/payment/config",
+    "GET /api/student/dashboard",
+    "GET /api/instructor/dashboard"
+  ]
+}

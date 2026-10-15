@@ -1,0 +1,150 @@
+---
+title: "Examwizards Architecture: Spring Boot, React, and AWS"
+sidebarTitle: "Architecture"
+description: "A layered walkthrough of Examwizards — React SPA, Spring Boot API, MySQL, AWS ECS Fargate with CloudFront, and the standalone Gemini chatbot microservice."
+---
+
+Examwizards is designed as a classic three-tier web application with a clear separation between presentation, application logic, and data — packaged as containers and shaped for AWS from the ground up. The React SPA runs in the browser and communicates exclusively with the Spring Boot REST API over HTTPS. The API owns all business logic, persists state in MySQL, and delegates secrets management to AWS Secrets Manager in production. A standalone Node.js chatbot microservice sits alongside the API and is called directly by the browser — it never touches the Spring Boot process. All layers are built as Docker images and tracked in ECR, deployed to ECS Fargate tasks behind an Application Load Balancer, and fronted by CloudFront with WAF for edge security and CDN delivery.
+
+## Architectural Layers
+
+### Edge Layer
+
+Incoming traffic first hits **AWS WAF** for rate-limiting and rule enforcement, then passes through **CloudFront**, which serves the React SPA from **S3** and forwards API requests to the ALB. **ACM** provides TLS certificates; **Route 53** handles DNS. This layer keeps the origin completely private — ECS tasks live in private subnets and have no direct internet exposure.
+
+### Application Layer
+
+The **Application Load Balancer** terminates TLS (ACM certificate), performs health checks, and routes traffic across two or more **ECS Fargate** tasks running the Spring Boot container. Fargate tasks pull their image from **ECR** and read runtime secrets from **Secrets Manager** at task startup — no credentials baked into images. The React SPA is a static build deployed to **S3** and distributed through CloudFront.
+
+### Data Layer
+
+| Store | Service | Purpose |
+|---|---|---|
+| Primary database | RDS MySQL 8 (Multi-AZ) | All platform entities — users, courses, exams, enrollments, results |
+| Cache / coordination | ElastiCache Redis | Session caching, rate limiting, leaderboard acceleration |
+| Object storage | S3 | Course assets, user uploads, SPA static files |
+| Secrets | Secrets Manager | DB credentials, JWT material, Razorpay and Gemini keys |
+
+## AWS Building Blocks
+
+| Component | Role |
+|---|---|
+| VPC / subnets | Public subnets for ALB and NAT gateways; private subnets for ECS tasks, RDS, and Redis |
+| ECS Fargate | Runs the Spring Boot container; scales on CPU/RPS; no EC2 instances to manage |
+| ALB | TLS termination, path-based routing, health checks to Fargate tasks |
+| RDS MySQL | Primary data store; Multi-AZ with automated backups in production |
+| ElastiCache Redis | Cache layer for session data and leaderboards |
+| S3 + CloudFront | SPA asset hosting, user-uploaded content, CDN delivery with edge caching |
+| WAF + ACM | Edge rate-limiting rules and managed TLS certificates |
+| Secrets Manager | Rotatable secrets — DB credentials, JWT key, vendor API keys |
+| SQS | Async queue for email dispatch, webhooks, and background jobs |
+| ECR | Per-environment Docker image registry with immutable tags for production |
+| CloudWatch | Centralised logs, metrics, alarms, and dashboards for all services |
+
+<Info>
+Terraform modules for VPC, ECS cluster, RDS, CloudFront, IAM, and CloudWatch live under `infra/aws/terraform/`. The `enable_vpc` and `enable_ecs_cluster` flags default to **off** so resources are not accidentally provisioned. Apply with care in a dedicated AWS account.
+</Info>
+
+## Chatbot Microservice
+
+The Gemini chatbot is a purpose-built Node.js / Express service that runs independently from Spring Boot. In Docker Compose it listens on port `5000`; in production it would be its own ECS Fargate service.
+
+**Endpoints**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Liveness check. Returns `{ "status": "ok", "service": "examwizards-chatbot" }`. |
+| `POST` | `/api/ask` | Accepts `{ "question": "..." }` and returns `{ "answer": "..." }`. |
+
+**How it works** — Each `POST /api/ask` appends the user's message to an in-process `History` array, calls `ai.models.generateContent` on the `gemini-2.5-flash` model with the full history and a platform-specific system instruction, appends the model reply, and streams the answer back to the browser. The browser calls this service directly using `VITE_CHATBOT_API_URL`; no traffic passes through the Spring Boot API.
+
+```javascript
+// chatbot/server.js (simplified)
+app.post("/api/ask", async (req, res) => {
+  const { question } = req.body;
+  History.push({ role: "user", parts: [{ text: question }] });
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: History,
+    config: { systemInstruction },
+  });
+
+  History.push({ role: "model", parts: [{ text: response.text }] });
+  res.json({ answer: response.text });
+});
+```
+
+<Warning>
+The in-process `History` array is global and shared across all concurrent users in a single process instance. For multi-user production deployments, replace this with a per-session store (e.g., keyed by a session ID in Redis) before exposing the chatbot publicly.
+</Warning>
+
+## Security Overview
+
+Examwizards applies defence-in-depth across the network, application, and data tiers.
+
+**Application security**
+
+| Control | Implementation |
+|---|---|
+| Authentication | Stateless JWT (HS256, minimum 32-char secret). Tokens carry the user's role claim and are verified on every request by `JwtAuthenticationFilter`. |
+| Authorisation | Spring Security RBAC — `ROLE_STUDENT`, `ROLE_INSTRUCTOR`, `ROLE_ADMIN`. Route rules are declared in `SecurityConfig.filterChain()`. |
+| Password storage | BCrypt via `BCryptPasswordEncoder`. Plain-text passwords are never stored. |
+| Email verification | New accounts receive a verification link. `isEmailVerified` is checked at login; unverified accounts receive HTTP 403. |
+| Admin bootstrapping | `DefaultAdminBootstrap` creates the first admin from `EW_BOOTSTRAP_ADMIN_*` env vars on a fresh DB and skips if any admin already exists. |
+| CORS | Wildcard `allowedOriginPatterns("*")` with `allowCredentials(true)` in development. Tighten to your production origin before deploying. |
+
+**AWS security**
+
+| Control | Service |
+|---|---|
+| Credentials at rest | Secrets Manager (DB creds, JWT key, API keys) — never baked into images |
+| Network isolation | Private subnets for ECS and RDS; security groups with minimal ingress |
+| TLS | ACM certificates on CloudFront and ALB; TLS 1.2+ enforced |
+| Edge protection | WAF rate-limiting and managed rule groups in front of CloudFront |
+| Audit | CloudTrail + AWS Config for API-level and resource-change auditing |
+| CI identity | GitHub OIDC → IAM role (no long-lived AWS keys in GitHub secrets) |
+
+## Repository Layout
+
+```text
+Examwizards-Platform/
+├── .github/workflows/     CI (Maven + Vite build, Terraform validate/plan)
+├── backend/               Spring Boot 2.7, Maven wrapper, multi-stage Dockerfile
+├── frontend/              React 18 / Vite SPA, multi-stage Dockerfile, vercel.json
+├── chatbot/               Gemini Node.js microservice (server.js, Dockerfile)
+├── infra/
+│   ├── aws/docs/          OIDC setup, Terraform PR plan guide
+│   └── aws/terraform/     VPC, ECS cluster, RDS, CloudFront modules (flags off by default)
+├── infra/azure/terraform/ Preview-only Azure config (disabled by default)
+├── terraform/             Symlink / pointer to infra/aws/terraform
+├── ecs-task-definitions/  Fargate JSON task-definition templates
+├── deploy/                ECR push example script
+├── nginx/                 Reverse-proxy config snippets
+├── docker/production/     Image hardening notes
+├── monitoring/            CloudWatch guidance
+├── observability/         Logs and metrics notes
+├── docker-compose.yml     Local four-service stack
+├── Dockerfile             Monolith-style demo image
+├── Jenkinsfile            Parameterised image build and registry push
+├── nginx.conf             Root nginx configuration
+├── .env.example           All environment variable stubs
+└── README.md
+```
+
+## Go Deeper
+
+<CardGroup cols={2}>
+  <Card title="Deploy to AWS" icon="aws" href="/deployment/aws">
+    Terraform walkthrough for VPC, ECS Fargate, RDS, CloudFront, and Secrets Manager.
+  </Card>
+  <Card title="CI/CD Pipeline" icon="arrows-spin" href="/deployment/ci-cd">
+    GitHub Actions build matrix, Jenkins promotion gate, and ECR immutable-digest strategy.
+  </Card>
+  <Card title="Docker Compose" icon="docker" href="/deployment/docker-compose">
+    Full reference for the local four-service Compose stack and volume management.
+  </Card>
+  <Card title="Environment Variables" icon="sliders" href="/configuration/environment-variables">
+    Every variable explained with allowed values, defaults, and production guidance.
+  </Card>
+</CardGroup>

@@ -1,0 +1,202 @@
+---
+title: "Enrollments: Student Course Access and Lifecycle Management"
+sidebarTitle: "Enrollments"
+description: "Students enroll in free courses instantly, purchase paid courses via Razorpay, or receive automatic access to private courses — instructors view stats and manage access."
+---
+
+An enrollment record is created every time a student gains access to a course. The access path depends on the course type: free public courses enroll instantly via a direct API call; paid public courses require a completed Razorpay transaction; and private courses auto-enroll students whose email addresses are listed in the instructor's uploaded CSV when the course is created or updated. Each enrollment carries a status (`ENROLLED`) and optionally a `paymentTransactionId` for paid enrollments. Instructors can view all enrollments for their courses, paginate through student lists, and retrieve aggregate stats from a single endpoint.
+
+## Enrollment Lifecycle
+
+<Steps>
+  <Step title="Student discovers a course">
+    `GET /api/courses/public` returns all public courses. Private courses are not visible here — students in a private course are enrolled automatically by the instructor.
+  </Step>
+  <Step title="Student checks enrollment status">
+    `GET /api/enrollments/check/{courseId}` returns whether the student is already enrolled and, if so, the enrollment ID and date.
+  </Step>
+  <Step title="Enroll or purchase">
+    Free public course → `POST /api/courses/{courseId}/enroll`. Paid public course → initiate payment flow via `POST /api/courses/{courseId}/purchase` (see [Payments](/features/payments)).
+  </Step>
+  <Step title="Student accesses exams">
+    Once enrolled, `GET /api/exams/student/enrolled` surfaces all exams for the student's active courses.
+  </Step>
+  <Step title="Cancel if needed">
+    `DELETE /api/enrollments/{enrollmentId}` removes the enrollment. Only the enrolled student may cancel their own enrollment.
+  </Step>
+</Steps>
+
+## Enrolling in a Free Course
+
+Students call `POST /api/courses/{courseId}/enroll`. The server validates that the course is `PUBLIC` and `FREE`, checks for an existing enrollment, and creates a new `Enrollment` record with status `ENROLLED`.
+
+```bash
+curl -X POST http://localhost:8080/api/courses/12/enroll \
+  -H "Authorization: Bearer <student_token>"
+```
+
+**Successful response (HTTP 200):**
+
+```json
+{
+  "message": "Successfully enrolled in course",
+  "courseId": 12,
+  "courseName": "Introduction to Algebra",
+  "enrollmentId": 55
+}
+```
+
+<Note>
+  Attempting to enroll in a `PRIVATE` course via this endpoint returns HTTP 400. Private course access is granted by the instructor when the course is created with an email allowlist.
+</Note>
+
+## Checking Enrollment Status
+
+```bash
+curl http://localhost:8080/api/enrollments/check/12 \
+  -H "Authorization: Bearer <student_token>"
+```
+
+**Response when enrolled:**
+
+```json
+{
+  "isEnrolled": true,
+  "courseId": 12,
+  "enrollmentId": 55,
+  "enrollmentDate": "2025-08-15T14:30:00",
+  "status": "ENROLLED"
+}
+```
+
+**Response when not enrolled:**
+
+```json
+{
+  "isEnrolled": false,
+  "courseId": 12
+}
+```
+
+## Listing a Student's Enrollments
+
+`GET /api/enrollments/my-enrollments` returns a paginated list of the authenticated student's enrollments. The response includes Spring Data page metadata for client-side pagination.
+
+```bash
+curl "http://localhost:8080/api/enrollments/my-enrollments?page=0&size=10&sortBy=enrollmentDate&sortDir=desc" \
+  -H "Authorization: Bearer <student_token>"
+```
+
+**Response:**
+
+```json
+{
+  "enrollments": [
+    {
+      "id": 55,
+      "enrollmentDate": "2025-08-15T14:30:00",
+      "status": "ENROLLED",
+      "paymentTransactionId": null,
+      "course": {
+        "id": 12,
+        "name": "Introduction to Algebra",
+        "visibility": "PUBLIC",
+        "pricing": "FREE"
+      }
+    }
+  ],
+  "currentPage": 0,
+  "totalItems": 3,
+  "totalPages": 1,
+  "hasNext": false,
+  "hasPrevious": false
+}
+```
+
+**Pagination query parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `page` | `0` | Zero-based page number |
+| `size` | `10` | Items per page |
+| `sortBy` | `enrollmentDate` | Field to sort by |
+| `sortDir` | `desc` | `asc` or `desc` |
+
+## Getting a Single Enrollment
+
+`GET /api/enrollments/{enrollmentId}` returns full enrollment details. The server validates that the enrollment belongs to the requesting user; accessing another student's enrollment returns HTTP 403.
+
+```bash
+curl http://localhost:8080/api/enrollments/55 \
+  -H "Authorization: Bearer <student_token>"
+```
+
+## Cancelling an Enrollment
+
+```bash
+curl -X DELETE http://localhost:8080/api/enrollments/55 \
+  -H "Authorization: Bearer <student_token>"
+```
+
+```json
+{
+  "message": "Enrollment cancelled successfully",
+  "enrollmentId": 55
+}
+```
+
+## Instructor Views
+
+### Enrollments for a specific course
+
+`GET /api/enrollments/course/{courseId}` is paginated and returns student details alongside the enrollment record. The server validates that the authenticated user is the instructor who owns the course.
+
+```bash
+curl "http://localhost:8080/api/enrollments/course/12?page=0&size=20" \
+  -H "Authorization: Bearer <instructor_token>"
+```
+
+```json
+{
+  "enrollments": [
+    {
+      "id": 55,
+      "enrollmentDate": "2025-08-15T14:30:00",
+      "status": "ENROLLED",
+      "paymentTransactionId": null,
+      "student": {
+        "id": 8,
+        "username": "jane_doe",
+        "email": "jane@example.com",
+        "fullName": "Jane Doe"
+      }
+    }
+  ],
+  "currentPage": 0,
+  "totalItems": 42,
+  "totalPages": 3,
+  "hasNext": true,
+  "hasPrevious": false
+}
+```
+
+### Instructor aggregate stats
+
+`GET /api/enrollments/instructor/stats` returns a summary map of total courses, total enrollments, and per-course breakdowns for the authenticated instructor.
+
+```bash
+curl http://localhost:8080/api/enrollments/instructor/stats \
+  -H "Authorization: Bearer <instructor_token>"
+```
+
+## Endpoint Reference
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/courses/{courseId}/enroll` | Student | Enroll in a free public course |
+| `GET` | `/api/enrollments/check/{courseId}` | Student | Check enrollment status |
+| `GET` | `/api/enrollments/my-enrollments` | Student | Paginated list of own enrollments |
+| `GET` | `/api/enrollments/{enrollmentId}` | Student | Get a single enrollment |
+| `DELETE` | `/api/enrollments/{enrollmentId}` | Student | Cancel an enrollment |
+| `GET` | `/api/enrollments/course/{courseId}` | Instructor | List enrollments for a course |
+| `GET` | `/api/enrollments/instructor/stats` | Instructor | Aggregate enrollment statistics |

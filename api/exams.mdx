@@ -1,0 +1,525 @@
+---
+title: "Exams API: Create, Schedule, and Submit Exam Endpoints"
+sidebarTitle: "Exams"
+description: "Full reference for all /api/exams and /api/questions endpoints covering exam CRUD, access control, student exam listing, auto-graded submission, and question management."
+---
+
+The Exams API lets instructors create and schedule timed assessments attached to courses, and lets students discover, access, and submit them. Exams carry a start/end date-time window that drives a computed `status` field (`upcoming`, `active`, `completed`). Submission auto-grades MCQ questions and dispatches a result email to the student. The companion Questions API provides fine-grained CRUD over individual question records.
+
+---
+
+## GET /api/exams
+
+Returns every exam in the system as a flat list with questions embedded. Primarily used internally; prefer the scoped endpoints below for production UI flows.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK` — array of `Exam` entities.
+
+<ResponseField name="exam_id" type="number">
+  Unique exam identifier.
+</ResponseField>
+<ResponseField name="title" type="string">
+  Exam title.
+</ResponseField>
+<ResponseField name="duration" type="number">
+  Allowed duration in minutes.
+</ResponseField>
+<ResponseField name="isactive" type="boolean">
+  Whether the exam is currently active.
+</ResponseField>
+<ResponseField name="questions" type="array">
+  Array of `Question` objects associated with this exam.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/exams \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## POST /api/exams
+
+Creates a new exam. The exam must be linked to an existing course via `course.id`. Questions can be embedded inline in the same request.
+
+**Auth**: Bearer JWT — any authenticated role (instructors only in practice).
+
+<ParamField body="title" type="string" required>
+  Exam title shown to students.
+</ParamField>
+<ParamField body="description" type="string">
+  Optional exam description or instructions summary.
+</ParamField>
+<ParamField body="duration" type="number" required>
+  Exam duration in minutes.
+</ParamField>
+<ParamField body="totalMarks" type="number">
+  Total marks for the exam. If `0`, marks are summed from individual question weights.
+</ParamField>
+<ParamField body="startDate" type="string">
+  Exam open date in `yyyy-MM-dd` format (e.g. `"2025-09-01"`).
+</ParamField>
+<ParamField body="startTime" type="string">
+  Exam open time in `HH:mm` format (e.g. `"09:00"`).
+</ParamField>
+<ParamField body="endDate" type="string">
+  Exam close date in `yyyy-MM-dd` format.
+</ParamField>
+<ParamField body="endTime" type="string">
+  Exam close time in `HH:mm` format.
+</ParamField>
+<ParamField body="instructions" type="string">
+  Full instructions text shown before the student starts.
+</ParamField>
+<ParamField body="isactive" type="boolean">
+  Whether the exam is immediately active.
+</ParamField>
+<ParamField body="course" type="object" required>
+  Object with a single `id` field referencing the parent course (e.g. `{"id": 10}`).
+</ParamField>
+<ParamField body="questions" type="array">
+  Optional array of `Question` objects to create alongside the exam.
+</ParamField>
+
+**Response** `200 OK` — this endpoint returns no body (void). A `200` status confirms the exam was saved.
+
+```bash
+curl -X POST http://localhost:8080/api/exams \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "Java Fundamentals Quiz",
+    "description": "Test your Java basics",
+    "duration": 30,
+    "totalMarks": 50,
+    "startDate": "2025-09-01",
+    "startTime": "09:00",
+    "endDate": "2025-09-30",
+    "endTime": "23:59",
+    "isactive": true,
+    "course": {"id": 10},
+    "questions": []
+  }'
+```
+
+---
+
+## GET /api/exams/instructor
+
+Returns all exams belonging to the authenticated instructor's courses, enriched with computed fields: question count, total marks, student count, status, date/time formatting, and time-remaining countdown.
+
+**Auth**: Bearer JWT — INSTRUCTOR role required.
+
+**Response** `200 OK` — array of enhanced exam objects.
+
+<ResponseField name="exam_id" type="number">
+  Exam identifier.
+</ResponseField>
+<ResponseField name="title" type="string">
+  Exam title.
+</ResponseField>
+<ResponseField name="questionCount" type="number">
+  Number of questions in the exam.
+</ResponseField>
+<ResponseField name="totalMarks" type="number">
+  Total marks (computed from questions if not explicitly set).
+</ResponseField>
+<ResponseField name="studentCount" type="number">
+  Number of students who have access to this exam.
+</ResponseField>
+<ResponseField name="status" type="string">
+  `"upcoming"`, `"active"`, `"completed"`, or `"inactive"`.
+</ResponseField>
+<ResponseField name="timeRemaining" type="string">
+  Human-readable countdown, e.g. `"2d 4h 30m"` or `"Expired"`.
+</ResponseField>
+<ResponseField name="courseName" type="string">
+  Name of the parent course.
+</ResponseField>
+<ResponseField name="durationDisplay" type="string">
+  Formatted string, e.g. `"30 minutes"`.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/exams/instructor \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/exams/{id}
+
+Returns a single exam by ID with all enhanced fields, the full questions list, and an array of `completedStudents` showing who has already submitted.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK` — enhanced exam object.
+
+<ResponseField name="exam_id" type="number">
+  Exam identifier.
+</ResponseField>
+<ResponseField name="title" type="string">
+  Exam title.
+</ResponseField>
+<ResponseField name="questions" type="array">
+  Full list of question objects including options and correct answer indices.
+</ResponseField>
+<ResponseField name="completedStudents" type="array">
+  Array of `{userId, name, email, score, totalMarks, percentage, passed, attemptDate}` objects.
+</ResponseField>
+<ResponseField name="completedStudentsCount" type="number">
+  Count of students who have submitted.
+</ResponseField>
+<ResponseField name="status" type="string">
+  Computed status: `"upcoming"`, `"active"`, `"completed"`, or `"inactive"`.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/exams/7 \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## PUT /api/exams/{id}
+
+Updates an existing exam. The authenticated user must be the instructor of the course the exam belongs to. Preserves the existing course association if `course` is omitted from the body.
+
+**Auth**: Bearer JWT — INSTRUCTOR role required (must own the parent course).
+
+<ParamField body="title" type="string">
+  Updated exam title.
+</ParamField>
+<ParamField body="duration" type="number">
+  Updated duration in minutes.
+</ParamField>
+<ParamField body="startDate" type="string">
+  Updated start date `yyyy-MM-dd`.
+</ParamField>
+<ParamField body="startTime" type="string">
+  Updated start time `HH:mm`.
+</ParamField>
+<ParamField body="endDate" type="string">
+  Updated end date `yyyy-MM-dd`.
+</ParamField>
+<ParamField body="endTime" type="string">
+  Updated end time `HH:mm`.
+</ParamField>
+<ParamField body="isactive" type="boolean">
+  Updated active flag.
+</ParamField>
+<ParamField body="questions" type="array">
+  Replacement questions array. Existing questions are replaced.
+</ParamField>
+
+**Response** `200 OK` — enhanced exam object with `"success": true` and `"message": "Exam updated successfully"`.
+
+```bash
+curl -X PUT http://localhost:8080/api/exams/7 \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"title": "Java Fundamentals Quiz v2", "duration": 45, "isactive": true}'
+```
+
+---
+
+## DELETE /api/exams/{id}
+
+Deletes an exam and its associated data.
+
+**Auth**: Bearer JWT — any authenticated role (ownership enforced via the course).
+
+**Response** `200 OK` — no body.
+
+```bash
+curl -X DELETE http://localhost:8080/api/exams/7 \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/exams/{examId}/access
+
+Checks whether the authenticated user may take a specific exam. Access is granted based on course enrollment (for public courses) or presence in the allowed-emails list (for private courses). Also reports whether the user has already submitted.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK`
+
+<ResponseField name="hasAccess" type="boolean">
+  `true` if the user may attempt this exam.
+</ResponseField>
+<ResponseField name="reason" type="string">
+  Explanation when `hasAccess` is `false`.
+</ResponseField>
+<ResponseField name="hasSubmitted" type="boolean">
+  `true` if the user has already submitted a result for this exam.
+</ResponseField>
+<ResponseField name="examTitle" type="string">
+  The exam title.
+</ResponseField>
+<ResponseField name="courseId" type="number">
+  Parent course ID.
+</ResponseField>
+<ResponseField name="courseName" type="string">
+  Parent course name.
+</ResponseField>
+<ResponseField name="courseVisibility" type="string">
+  `"PUBLIC"` or `"PRIVATE"`.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/exams/7/access \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/exams/allowed/{email}
+
+Returns all exams accessible to the student identified by `email`, checking both enrollment-based access (public courses) and allowed-email access (private courses).
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK` — array of enhanced exam objects (same shape as `/instructor`).
+
+```bash
+curl "http://localhost:8080/api/exams/allowed/jdoe@example.com" \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/exams/student/enrolled
+
+Returns all exams from every course the authenticated student is currently enrolled in. Useful for the student dashboard to display upcoming and active exams across all courses.
+
+**Auth**: Bearer JWT — STUDENT role required.
+
+**Response** `200 OK` — array of enhanced exam objects per enrolled course.
+
+```bash
+curl http://localhost:8080/api/exams/student/enrolled \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/exams/course/{courseId}
+
+Returns all exams associated with a specific course.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK` — array of enhanced exam objects.
+
+```bash
+curl http://localhost:8080/api/exams/course/10 \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## POST /api/exams/{id}/submit
+
+Submits the student's answers for auto-grading. MCQ answers are matched against `correct_options` indices using text, index, or option-ID comparison. Multiple-choice questions use partial scoring. Text questions receive full marks automatically. A result email is sent to the student after grading.
+
+**Auth**: Bearer JWT — STUDENT role required.
+
+<ParamField body="answers" type="object" required>
+  A JSON object mapping question ID strings to the student's answer strings. For MCQ use the option text, index, or option ID. For multiple-choice separate multiple selections with commas.
+  Example: `{"1": "Java", "2": "0", "3": "OOP,Polymorphism"}`.
+</ParamField>
+<ParamField body="timeTaken" type="number">
+  Seconds the student spent on the exam. Used for reporting; does not affect scoring.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="success" type="boolean">
+  `true` on successful submission.
+</ResponseField>
+<ResponseField name="result_id" type="number">
+  ID of the persisted result record.
+</ResponseField>
+<ResponseField name="exam_id" type="number">
+  The submitted exam's ID.
+</ResponseField>
+<ResponseField name="exam_title" type="string">
+  The exam title.
+</ResponseField>
+<ResponseField name="score" type="number">
+  Raw score earned.
+</ResponseField>
+<ResponseField name="total_marks" type="number">
+  Maximum possible score.
+</ResponseField>
+<ResponseField name="percentage" type="number">
+  Score as a percentage, rounded to two decimal places.
+</ResponseField>
+<ResponseField name="passed" type="boolean">
+  `true` if the student scored ≥ 60%.
+</ResponseField>
+<ResponseField name="total_questions" type="number">
+  Total number of questions in the exam.
+</ResponseField>
+<ResponseField name="answered_questions" type="number">
+  Number of questions the student actually answered.
+</ResponseField>
+<ResponseField name="feedback" type="string">
+  Auto-generated feedback string based on percentage band.
+</ResponseField>
+<ResponseField name="submitted_at" type="string">
+  ISO-8601 timestamp of submission.
+</ResponseField>
+
+<Note>
+  A result email is dispatched to the student's registered address immediately after grading. Email failure does not roll back the submission.
+</Note>
+
+```bash
+curl -X POST http://localhost:8080/api/exams/7/submit \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "answers": {
+      "101": "Polymorphism",
+      "102": "0",
+      "103": "Compile-time error"
+    },
+    "timeTaken": 1200
+  }'
+```
+
+---
+
+## Questions Sub-Resource
+
+Questions are standalone entities linked to exams via `examId`. They can be managed independently through the `/api/questions` endpoints.
+
+---
+
+### GET /api/questions
+
+Returns all question records in the system.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK` — array of `Question` entities.
+
+```bash
+curl http://localhost:8080/api/questions \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+### GET /api/questions/{id}
+
+Returns a single question by its ID.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK` — `Question` entity, or `404` if not found.
+
+```bash
+curl http://localhost:8080/api/questions/101 \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+### POST /api/questions
+
+Creates a new question record linked to an exam.
+
+**Auth**: Bearer JWT — any authenticated role (instructor in practice).
+
+<ParamField body="question" type="string" required>
+  The question text displayed to students.
+</ParamField>
+<ParamField body="type" type="string" required>
+  `"mcq"` for single-choice, `"multiple"` for multi-select, or `"text"` for open-ended.
+</ParamField>
+<ParamField body="options" type="array">
+  Array of option objects `{"availableOption": "..."}`. Required for `mcq` and `multiple` types.
+</ParamField>
+<ParamField body="correct_options" type="array">
+  Array of zero-based indices indicating which options are correct (e.g. `[0]` for the first option).
+</ParamField>
+<ParamField body="marks" type="number">
+  Points awarded for a correct answer. Defaults to `1` if omitted.
+</ParamField>
+<ParamField body="exam" type="object">
+  Object with `exam_id` referencing the parent exam (e.g. `{"exam_id": 7}`).
+</ParamField>
+
+**Response** `200 OK` — the saved `Question` entity with generated `que_id`.
+
+```bash
+curl -X POST http://localhost:8080/api/questions \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "question": "What is the output of System.out.println(1 + 2 + \"3\")?",
+    "type": "mcq",
+    "options": [
+      {"availableOption": "33"},
+      {"availableOption": "6"},
+      {"availableOption": "123"},
+      {"availableOption": "Compile error"}
+    ],
+    "correct_options": [0],
+    "marks": 2,
+    "exam": {"exam_id": 7}
+  }'
+```
+
+---
+
+### PUT /api/questions/{id}
+
+Replaces an existing question with new data.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+<ParamField body="question" type="string">
+  Updated question text.
+</ParamField>
+<ParamField body="type" type="string">
+  Updated question type.
+</ParamField>
+<ParamField body="options" type="array">
+  Replacement options array.
+</ParamField>
+<ParamField body="correct_options" type="array">
+  Replacement correct-option indices.
+</ParamField>
+<ParamField body="marks" type="number">
+  Updated marks value.
+</ParamField>
+
+**Response** `200 OK` — the updated `Question` entity.
+
+```bash
+curl -X PUT http://localhost:8080/api/questions/101 \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "Updated question text?", "marks": 3, "correct_options": [1]}'
+```
+
+---
+
+### DELETE /api/questions/{id}
+
+Permanently deletes a question record.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `204 No Content` on success; `404` if the question does not exist.
+
+```bash
+curl -X DELETE http://localhost:8080/api/questions/101 \
+  -H 'Authorization: Bearer <token>'
+```

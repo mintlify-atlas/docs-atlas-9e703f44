@@ -1,0 +1,337 @@
+---
+title: "Deploy Examwizards to AWS ECS Fargate with Terraform"
+sidebarTitle: "AWS Deployment"
+description: "Production deployment guide covering ECS Fargate, RDS MySQL Multi-AZ, CloudFront with WAF, Secrets Manager, and Terraform IaC with cost-safe feature flags."
+---
+
+The production target for Examwizards is AWS ECS Fargate sitting behind an Application Load Balancer, with the React SPA served from S3 through CloudFront. WAF rules and ACM certificates guard the edge. Database workloads run on RDS MySQL with Multi-AZ standby; secrets — DB credentials, JWT material, Razorpay keys, and the Gemini API key — live exclusively in Secrets Manager and are injected into containers at task startup via the ECS `secrets` field. Terraform IaC for this topology lives in `infra/aws/terraform/`.
+
+<Warning>
+  The `app.cors.allowed-origin-patterns` property in `WebConfig.java` defaults to `http://localhost:5173,http://localhost:3000` in development, but you **must** set it to your exact CloudFront or custom domain before going to production. Leaving it at a wildcard pattern exposes your API to cross-origin requests from any origin.
+</Warning>
+
+## AWS service map
+
+| AWS service | Role in Examwizards |
+|---|---|
+| VPC / subnets | Public subnets host the ALB and NAT gateways; private subnets host ECS tasks and data stores |
+| ECS Fargate | Runs the Spring Boot API (`examwizards-api`) and Gemini chatbot (`examwizards-chatbot`) as serverless containers |
+| Application Load Balancer | TLS termination, health-check routing, and traffic distribution across multi-AZ Fargate tasks |
+| RDS MySQL 8 (Multi-AZ) | Primary relational store; standby replica handles automatic failover in prod |
+| ElastiCache Redis | Session caching and coordination layer |
+| S3 + CloudFront | Hosts the compiled React SPA assets and serves uploads via CDN |
+| WAF + ACM | Rate-limiting rules at the edge; ACM manages TLS certificates |
+| Secrets Manager | Stores `DB_PASSWORD`, `JWT_SECRET`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `GENAI_API_KEY` |
+| SQS | Async job queue for email dispatch and webhook processing |
+| ECR | Container image registry — one repository per service per environment |
+| CloudWatch | Centralised logs (via `awslogs` driver), metrics, and alarms |
+
+## Terraform layout
+
+The Terraform entry point is `infra/aws/terraform/`. Composable modules live under `infra/aws/terraform/modules/`:
+
+```
+infra/aws/terraform/
+├── main.tf                        # Root stack — wires modules with count guards
+├── variables.tf                   # enable_vpc, enable_ecs_cluster flags + region/project
+├── providers.tf                   # hashicorp/aws ~> 5.0, default_tags
+├── versions.tf                    # Terraform >= 1.5.0
+├── outputs.tf
+├── backend.tf.example             # S3 + DynamoDB lock template — copy and rename
+├── environments/
+│   └── dev/terraform.tfvars.example
+└── modules/
+    ├── vpc/          # 10.0.0.0/16 VPC, multi-AZ public subnets
+    ├── ecs-cluster/  # ECS cluster with Container Insights enabled
+    ├── ecs/          # Task definitions, services (README-guided extension)
+    ├── alb/          # Application Load Balancer
+    └── rds/          # RDS MySQL instance
+```
+
+### Cost-safe feature flags
+
+Both expensive modules are **off by default**. Enabling them requires an explicit variable override, which prevents accidental billing when running `terraform validate` in CI.
+
+```hcl
+variable "enable_vpc" {
+  type        = bool
+  description = "When true, provisions VPC module (public subnets)."
+  default     = false
+}
+
+variable "enable_ecs_cluster" {
+  type        = bool
+  description = "When true, creates an ECS cluster with Container Insights."
+  default     = false
+}
+```
+
+The root `main.tf` uses `count` to guard both modules:
+
+```hcl
+module "vpc" {
+  source = "./modules/vpc"
+  count  = var.enable_vpc ? 1 : 0
+
+  project_name = var.project_name
+  environment  = var.environment
+  aws_region   = var.aws_region
+}
+
+module "ecs_cluster" {
+  source = "./modules/ecs-cluster"
+  count  = var.enable_ecs_cluster ? 1 : 0
+
+  project_name = var.project_name
+  environment  = var.environment
+}
+```
+
+### Remote state
+
+Remote state uses S3 for storage, DynamoDB for locking, and KMS for encryption. Copy `infra/aws/terraform/backend.tf.example` to `backend.tf`, then replace the placeholder values with your bucket, table, and region:
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket         = "REPLACE_ME-terraform-state"
+    key            = "examwizards/dev/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "REPLACE_ME-terraform-locks"
+    encrypt        = true
+  }
+}
+```
+
+Create the S3 bucket and DynamoDB table before running `terraform init` with a real backend. During CI validation, the `ci.yml` workflow passes `-backend=false` to avoid requiring bucket access.
+
+## Deployment steps
+
+<Steps>
+  <Step title="Configure AWS credentials and the OIDC role">
+    For CI-driven plans, set the `TF_AWS_ROLE_ARN` Actions variable in your repository. For local apply, configure your AWS CLI profile:
+
+    ```bash
+    aws configure --profile examwizards-prod
+    export AWS_PROFILE=examwizards-prod
+    ```
+
+    See `infra/aws/docs/github-oidc-for-actions.md` for the full OIDC trust policy setup.
+  </Step>
+
+  <Step title="Configure the S3 remote backend">
+    ```bash
+    cd infra/aws/terraform
+    cp backend.tf.example backend.tf
+    # Edit backend.tf: replace REPLACE_ME-terraform-state and REPLACE_ME-terraform-locks
+    ```
+  </Step>
+
+  <Step title="Initialize Terraform">
+    ```bash
+    terraform init
+    ```
+
+    On first run this downloads the `hashicorp/aws ~> 5.0` provider and locks the version in `.terraform.lock.hcl`.
+  </Step>
+
+  <Step title="Select the production workspace">
+    ```bash
+    terraform workspace new prod    # if it doesn't exist yet
+    terraform workspace select prod
+    ```
+
+    Terraform workspaces (`dev`, `staging`, `prod`) keep state isolated. The `environment` variable in the tfvars file should match the workspace name.
+  </Step>
+
+  <Step title="Enable the VPC and ECS cluster">
+    Copy the example tfvars and set the feature flags to `true`:
+
+    ```hcl
+    # terraform.tfvars (gitignored)
+    aws_region         = "us-east-1"
+    project_name       = "examwizards"
+    environment        = "prod"
+    enable_vpc         = true
+    enable_ecs_cluster = true
+    ```
+  </Step>
+
+  <Step title="Plan and apply">
+    ```bash
+    terraform plan -var-file=terraform.tfvars -out=prod.tfplan
+    terraform apply prod.tfplan
+    ```
+
+    Review the plan output carefully — especially any resource replacements — before confirming apply.
+  </Step>
+
+  <Step title="Push container images to ECR">
+    Use the helper script as a reference. Set your account ID, region, and ECR repo name, then run:
+
+    ```bash
+    export AWS_REGION=us-east-1
+    export AWS_ACCOUNT_ID=123456789012
+    export ECR_REPO=examwizards-api
+    export IMAGE_TAG="git-$(git rev-parse --short HEAD)"
+    sh deploy/scripts/push-ecr.example.sh
+    ```
+
+    The script authenticates to ECR, builds the backend image from `backend/Dockerfile`, tags it with the git SHA, and pushes. Uncomment the optional block at the bottom to push the chatbot image (`ECR_REPO_CHATBOT=examwizards-chatbot`) in the same run.
+  </Step>
+
+  <Step title="Register and deploy the ECS task definition">
+    Replace the `REPLACE_ACCOUNT_ID` and `REPLACE_REGION` placeholders in the task definition templates, then register and force a new deployment:
+
+    ```bash
+    aws ecs register-task-definition \
+      --cli-input-json file://ecs-task-definitions/examwizards-api-task-definition.json
+
+    aws ecs update-service \
+      --cluster examwizards-prod-cluster \
+      --service examwizards-api \
+      --force-new-deployment
+    ```
+  </Step>
+</Steps>
+
+## Secrets Manager integration
+
+Never place secret values directly in task definition `environment` arrays or in Git. Store all secrets in AWS Secrets Manager and reference them via the `secrets` field in the task definition using `valueFrom` ARNs.
+
+The `examwizards-api-task-definition.json` template shows the pattern:
+
+```json
+{
+  "secrets": [
+    {
+      "name": "DB_PASSWORD",
+      "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:examwizards/db:password::"
+    },
+    {
+      "name": "JWT_SECRET",
+      "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:examwizards/jwt:secret::"
+    }
+  ]
+}
+```
+
+The chatbot task definition follows the same pattern for `GENAI_API_KEY`:
+
+```json
+{
+  "secrets": [
+    {
+      "name": "GENAI_API_KEY",
+      "valueFrom": "arn:aws:secretsmanager:REPLACE_REGION:REPLACE_ACCOUNT_ID:secret:examwizards/genai:api_key::"
+    }
+  ]
+}
+```
+
+Create the following secrets in Secrets Manager before running `aws ecs register-task-definition`:
+
+| Secret path | Key | Contains |
+|---|---|---|
+| `examwizards/db` | `password` | RDS MySQL password |
+| `examwizards/jwt` | `secret` | JWT signing secret (≥ 256-bit random value) |
+| `examwizards/razorpay` | `key_id`, `key_secret` | Razorpay API credentials |
+| `examwizards/genai` | `api_key` | Google Gemini API key |
+| `examwizards/email` | `username`, `password` | SMTP credentials |
+
+## ECS task definition reference
+
+Both task templates use Fargate launch type with `awsvpc` network mode. The API container listens on port `8080` with a health check against `http://localhost:8080/api/auth/health`; the chatbot listens on port `5000` with a health check against `http://localhost:5000/health`.
+
+<Tabs>
+  <Tab title="API task (512 CPU / 1024 MB)">
+    ```json
+    {
+      "family": "examwizards-api",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "cpu": "512",
+      "memory": "1024",
+      "containerDefinitions": [
+        {
+          "name": "api",
+          "image": "ACCOUNT.dkr.ecr.REGION.amazonaws.com/examwizards-api:latest",
+          "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
+          "environment": [
+            { "name": "SPRING_PROFILES_ACTIVE", "value": "prod" },
+            { "name": "SERVER_PORT", "value": "8080" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "curl -f http://localhost:8080/api/auth/health || exit 1"],
+            "interval": 30,
+            "timeout": 5,
+            "retries": 3,
+            "startPeriod": 60
+          },
+          "logConfiguration": {
+            "logDriver": "awslogs",
+            "options": {
+              "awslogs-group": "/ecs/examwizards-api",
+              "awslogs-region": "REPLACE_REGION",
+              "awslogs-stream-prefix": "ecs"
+            }
+          }
+        }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab title="Chatbot task (256 CPU / 512 MB)">
+    ```json
+    {
+      "family": "examwizards-chatbot",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "cpu": "256",
+      "memory": "512",
+      "containerDefinitions": [
+        {
+          "name": "chatbot",
+          "image": "ACCOUNT.dkr.ecr.REGION.amazonaws.com/examwizards-chatbot:latest",
+          "portMappings": [{ "containerPort": 5000, "protocol": "tcp" }],
+          "environment": [
+            { "name": "NODE_ENV", "value": "production" },
+            { "name": "PORT", "value": "5000" }
+          ],
+          "healthCheck": {
+            "command": ["CMD-SHELL", "wget -q -O- http://localhost:5000/health || exit 1"],
+            "interval": 30,
+            "timeout": 5,
+            "retries": 3,
+            "startPeriod": 10
+          },
+          "logConfiguration": {
+            "logDriver": "awslogs",
+            "options": {
+              "awslogs-group": "/ecs/examwizards-chatbot",
+              "awslogs-region": "REPLACE_REGION",
+              "awslogs-stream-prefix": "ecs"
+            }
+          }
+        }
+      ]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Azure preview alternative
+
+`infra/azure/terraform/` provides a cost-efficient preview path using Azure App Service (B1 plan) and Azure Database for MySQL Flexible Server. It creates no resources until you set `enable_azure = "true"` in `terraform.tfvars`. This is useful for validating application behaviour without incurring AWS networking costs.
+
+```hcl
+# infra/azure/terraform/terraform.tfvars (gitignored)
+enable_azure  = "true"
+location      = "centralindia"
+project_name  = "examwizards-preview"
+frontend_url  = "https://your-app.vercel.app"
+```
+
+<Tip>
+  For SPA-only previews that don't require the chatbot, deploy the compiled React `dist/` folder to **Vercel** and point `VITE_API_BASE_URL` at any accessible API (Azure preview, a Cloudflare Tunnel to local, or a shared dev ALB). The `frontend/vercel.json` file in the repo is pre-configured for SPA routing.
+</Tip>

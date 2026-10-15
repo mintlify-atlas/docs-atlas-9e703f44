@@ -1,0 +1,251 @@
+---
+title: "Courses: Create, Publish, and Manage Learning Content"
+sidebarTitle: "Courses"
+description: "Instructors create public or private courses with free or paid pricing, control visibility via CSV email lists, and manage enrollments from a single set of REST endpoints."
+---
+
+Courses are the primary unit of content in Examwizards. An instructor creates a course, sets its visibility (`PUBLIC` or `PRIVATE`) and pricing model (`FREE` or `PAID`), and optionally uploads a CSV of student email addresses for private access. Public courses appear in the browseable catalog; private courses are only visible to students whose email addresses appear in the allowlist. Exams are always attached to a course, so the course is also the access-control boundary for exam delivery.
+
+## Course Model
+
+<CardGroup cols={2}>
+  <Card title="Visibility" icon="eye">
+    `PUBLIC` — listed in the catalog and open for enrollment. `PRIVATE` — hidden from the catalog; access granted only to emails in the uploaded CSV.
+  </Card>
+  <Card title="Pricing" icon="credit-card">
+    `FREE` — students enroll directly at no cost. `PAID` — enrollment requires a Razorpay payment. Price is stored as a `BigDecimal`.
+  </Card>
+  <Card title="Instructor" icon="user">
+    Each course is owned by the authenticated instructor who creates it. Only the owner may update or delete the course.
+  </Card>
+  <Card title="Auto-enrollment" icon="user-plus">
+    When a private course is created or updated with a new CSV, any matching registered users are enrolled automatically.
+  </Card>
+</CardGroup>
+
+## Creating a Course
+
+`POST /api/courses/create` accepts a `multipart/form-data` body. The `file` field (a plain-text CSV of email addresses, one per line) is **required** for private courses and ignored for public ones.
+
+<Tabs>
+  <Tab title="Public Free Course">
+    ```bash
+    curl -X POST http://localhost:8080/api/courses/create \
+      -H "Authorization: Bearer <instructor_token>" \
+      -F "name=Introduction to Algebra" \
+      -F "description=A beginner course covering algebraic fundamentals." \
+      -F "visibility=PUBLIC" \
+      -F "pricing=FREE"
+    ```
+  </Tab>
+  <Tab title="Public Paid Course">
+    ```bash
+    curl -X POST http://localhost:8080/api/courses/create \
+      -H "Authorization: Bearer <instructor_token>" \
+      -F "name=Advanced Data Structures" \
+      -F "description=Deep dive into trees, graphs, and dynamic programming." \
+      -F "visibility=PUBLIC" \
+      -F "pricing=PAID" \
+      -F "price=499.00"
+    ```
+  </Tab>
+  <Tab title="Private Course with CSV">
+    ```bash
+    curl -X POST http://localhost:8080/api/courses/create \
+      -H "Authorization: Bearer <instructor_token>" \
+      -F "name=Internal Certification Prep" \
+      -F "description=Restricted course for registered employees only." \
+      -F "visibility=PRIVATE" \
+      -F "pricing=FREE" \
+      -F "file=@/path/to/allowed_emails.csv"
+    ```
+
+    The CSV file should contain one email address per line:
+
+    ```
+    alice@example.com
+    bob@example.com
+    carol@example.com
+    ```
+  </Tab>
+</Tabs>
+
+**Successful response (HTTP 200):**
+
+```json
+{
+  "id": 12,
+  "name": "Introduction to Algebra",
+  "description": "A beginner course covering algebraic fundamentals.",
+  "visibility": "PUBLIC",
+  "pricing": "FREE",
+  "price": null,
+  "instructor": {
+    "id": 3,
+    "username": "prof_smith",
+    "fullName": "Professor Smith"
+  },
+  "message": "Course created successfully"
+}
+```
+
+For private courses with matching registered users:
+
+```json
+{
+  "id": 15,
+  "name": "Internal Certification Prep",
+  "visibility": "PRIVATE",
+  "pricing": "FREE",
+  "autoEnrolledStudents": 7,
+  "enrollmentMessage": "Automatically enrolled 7 students",
+  "message": "Course created successfully"
+}
+```
+
+## Listing Courses
+
+<Accordion title="GET /api/courses/public — Browse the public catalog">
+  Returns all courses with `visibility = PUBLIC`, including enrollment counts. No authentication required.
+
+  ```bash
+  curl http://localhost:8080/api/courses/public
+  ```
+
+  ```json
+  [
+    {
+      "id": 12,
+      "name": "Introduction to Algebra",
+      "visibility": "PUBLIC",
+      "pricing": "FREE",
+      "price": null,
+      "enrollmentCount": 42,
+      "instructor": {
+        "id": 3,
+        "username": "prof_smith",
+        "fullName": "Professor Smith"
+      }
+    }
+  ]
+  ```
+</Accordion>
+
+<Accordion title="GET /api/courses/instructor — Instructor's own courses">
+  Returns all courses created by the authenticated instructor, with enrollment counts, exam counts, and (for private courses) the size of the allowed-emails list.
+
+  ```bash
+  curl http://localhost:8080/api/courses/instructor \
+    -H "Authorization: Bearer <instructor_token>"
+  ```
+
+  ```json
+  [
+    {
+      "id": 12,
+      "name": "Introduction to Algebra",
+      "visibility": "PUBLIC",
+      "pricing": "FREE",
+      "enrollmentCount": 42,
+      "examCount": 3
+    },
+    {
+      "id": 15,
+      "name": "Internal Certification Prep",
+      "visibility": "PRIVATE",
+      "pricing": "FREE",
+      "enrollmentCount": 7,
+      "allowedEmailsCount": 10,
+      "examCount": 1
+    }
+  ]
+  ```
+</Accordion>
+
+<Accordion title="GET /api/courses/{id} — Fetch a single course">
+  Returns the full course object by ID. No authentication required.
+
+  ```bash
+  curl http://localhost:8080/api/courses/12
+  ```
+</Accordion>
+
+## Updating a Course
+
+`PUT /api/courses/{courseId}` uses the same `multipart/form-data` format as creation. All fields must be re-sent; partial updates are not supported. Uploading a new CSV for a private course replaces the existing allowlist and auto-enrolls newly added students.
+
+```bash
+curl -X PUT http://localhost:8080/api/courses/12 \
+  -H "Authorization: Bearer <instructor_token>" \
+  -F "name=Introduction to Algebra — Revised" \
+  -F "description=Updated with new chapters on quadratics." \
+  -F "visibility=PUBLIC" \
+  -F "pricing=FREE"
+```
+
+## Deleting a Course
+
+`DELETE /api/courses/{courseId}` removes the course. The server returns HTTP 409 if any exams or enrollments still exist on the course — those must be removed first.
+
+```bash
+curl -X DELETE http://localhost:8080/api/courses/12 \
+  -H "Authorization: Bearer <instructor_token>"
+```
+
+```json
+{
+  "message": "Course deleted successfully",
+  "deletedCourseId": 12,
+  "deletedCourseName": "Introduction to Algebra"
+}
+```
+
+## Removing All Enrollments
+
+Before deleting a course that has students, use `POST /api/courses/{courseId}/unenroll-all` to clear all enrollments in one call:
+
+```bash
+curl -X POST http://localhost:8080/api/courses/12/unenroll-all \
+  -H "Authorization: Bearer <instructor_token>"
+```
+
+```json
+{
+  "message": "All students have been unenrolled successfully",
+  "unenrolledCount": 42,
+  "courseName": "Introduction to Algebra"
+}
+```
+
+## Checking Course Access
+
+Students and the frontend use `GET /api/courses/{courseId}/access` to confirm whether the authenticated user may access a course:
+
+```bash
+curl http://localhost:8080/api/courses/12/access \
+  -H "Authorization: Bearer <student_token>"
+```
+
+```json
+{
+  "hasAccess": true,
+  "accessType": "enrolled",
+  "courseId": 12,
+  "courseName": "Introduction to Algebra"
+}
+```
+
+## Endpoint Reference
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/courses/create` | Instructor | Create a new course |
+| `GET` | `/api/courses/public` | None | List all public courses |
+| `GET` | `/api/courses/instructor` | Instructor | List the instructor's courses |
+| `GET` | `/api/courses/{id}` | None | Get a course by ID |
+| `PUT` | `/api/courses/{courseId}` | Instructor | Update a course |
+| `DELETE` | `/api/courses/{courseId}` | Instructor | Delete a course |
+| `POST` | `/api/courses/{courseId}/unenroll-all` | Instructor | Remove all student enrollments |
+| `GET` | `/api/courses/{courseId}/access` | Any | Check access for current user |
+| `POST` | `/api/courses/{courseId}/enroll` | Student | Enroll in a free public course |
+| `POST` | `/api/courses/{courseId}/purchase` | Student | Initiate payment for a paid course |

@@ -1,47 +1,207 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Examwizards Running Locally in 5 Minutes"
+sidebarTitle: "Quickstart"
+description: "Clone, configure, and run all four Examwizards services — MySQL, Spring Boot API, Gemini chatbot, and React SPA — locally with one Docker Compose command."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+The fastest path to a working Examwizards environment is Docker Compose. A single `docker compose up -d` starts MySQL 8, the Spring Boot API, the Gemini chatbot microservice, and the React SPA — all wired together on an internal bridge network. If you prefer to run individual services outside Docker (for live-reload development), there are native commands at the end of this page.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+### Install prerequisites
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+You need the following tools on your machine before you begin.
 
-    ```bash
-    your-cli start
-    ```
-  </Step>
+| Tool | Minimum version | Notes |
+|---|---|---|
+| JDK | 17 | Required only for running the backend **without** Docker |
+| Node.js | 20 | Required only for running the frontend **without** Docker |
+| Docker Desktop / Engine | Latest stable | Required for the Compose workflow |
+
+Verify Docker is running:
+
+```bash
+docker info
+```
+
+### Clone the repository
+
+```bash
+git clone https://github.com/abhijeet-rane/Examwizards-Platform.git
+cd Examwizards-Platform
+```
+
+### Configure environment variables
+
+Copy the example file to `.env` at the repository root — Docker Compose and the Spring Boot process both read from this file at startup.
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` in your editor and fill in every value. The table below explains each variable.
+
+<Accordion title="All environment variables explained">
+
+**Database (Spring Boot / local JDBC)**
+
+| Variable | Example value | Purpose |
+|---|---|---|
+| `DB_URL` | `jdbc:mysql://localhost:3306/examwizards` | JDBC connection string used when running the backend **outside** Docker. Compose overrides this to `jdbc:mysql://mysql:3306/examwizards` automatically. |
+| `DB_USERNAME` | `examport` | MySQL user the Spring Boot app connects as. |
+| `DB_PASSWORD` | *(your password)* | Password for the MySQL user above. In Compose this also sets `MYSQL_ROOT_PASSWORD`. |
+
+**Email (Gmail SMTP)**
+
+| Variable | Example value | Purpose |
+|---|---|---|
+| `EMAIL_USERNAME` | `you@gmail.com` | Gmail address used as the SMTP sender. |
+| `EMAIL_PASSWORD` | *(16-char app password)* | Gmail [App Password](https://support.google.com/accounts/answer/185833) — not your regular Gmail password. 2FA must be enabled on the account. |
+| `EMAIL_FROM` | `ExamWizards <noreply@examwizards.com>` | Display name and address that appears in the `From:` header of outgoing emails. |
+| `EMAIL_ENABLED` | `true` | Set to `false` to skip email sending entirely (useful for offline testing). |
+| `EMAIL_ADMIN` | `you@gmail.com` | Address that receives contact-form submissions and admin notifications. |
+
+**Razorpay**
+
+| Variable | Example value | Purpose |
+|---|---|---|
+| `RAZORPAY_KEY_ID` | `rzp_test_xxxxxxxxxxxx` | Public key from your Razorpay dashboard (test or live). |
+| `RAZORPAY_KEY_SECRET` | *(secret)* | Secret key used server-side to create orders and verify payment signatures. Never expose this to the browser. |
+
+**Google Gemini (chatbot)**
+
+| Variable | Example value | Purpose |
+|---|---|---|
+| `GENAI_API_KEY` | *(your Gemini API key)* | API key for the `@google/genai` SDK in the `chatbot/` Node service. The service exits on startup if this is empty. Obtain a key from [Google AI Studio](https://aistudio.google.com/app/apikey). |
+
+**JWT**
+
+| Variable | Example value | Purpose |
+|---|---|---|
+| `JWT_SECRET` | *(≥32 UTF-8 characters)* | HS256 signing secret. Shorter secrets are rejected at startup. Use a random string of at least 64 characters for production. |
+
+**Bootstrap admin**
+
+| Variable | Example value | Purpose |
+|---|---|---|
+| `EW_BOOTSTRAP_ADMIN_EMAIL` | `admin@example.com` | Email for the auto-created admin account on a fresh database. The account is email-verified automatically. |
+| `EW_BOOTSTRAP_ADMIN_PASSWORD` | *(secure password)* | Password for the bootstrap admin. Change this immediately after first login. |
+| `EW_BOOTSTRAP_ADMIN_USERNAME` | `admin` | Username for the bootstrap admin. |
+
+**Frontend build-time (Vite)**
+
+| Variable | Example value | Purpose |
+|---|---|---|
+| `VITE_API_BASE_URL` | `http://localhost:8080/api` | The base URL the React app uses for all API calls. Set to your backend's public URL in production. Baked into the SPA at build time. |
+| `VITE_CHATBOT_API_URL` | `http://localhost:5000` | The public URL of the chatbot Node service. The browser calls this URL directly, so it must be reachable from the end-user's machine. |
+
+</Accordion>
+
+<Note>
+The `VITE_API_BASE_URL` and `VITE_CHATBOT_API_URL` values are embedded into the compiled JavaScript bundle at Docker build time. If you change them after the frontend image is already built, rebuild the frontend container with `docker compose build frontend`.
+</Note>
+
+### Start all services with Docker Compose
+
+```bash
+docker compose up -d
+```
+
+Compose starts four services in dependency order:
+
+| Service | Container | Port | Description |
+|---|---|---|---|
+| `mysql` | `examport-mysql` | `3306` | MySQL 8.0 with the `examwizards` database. A named volume (`mysql-data`) persists data between restarts. The backend waits for a healthy `mysqladmin ping` before starting. |
+| `backend` | `examport-backend` | `8080` | Spring Boot 2.7 API. Hibernate creates or updates tables on startup (`ddl-auto`). Application logs are written to the `backend-logs` volume. |
+| `chatbot` | `examport-chatbot` | `5000` | Node.js + Express microservice powered by Google Gemini. Exposes `POST /api/ask` and `GET /health`. |
+| `frontend` | `examport-frontend` | `3000` | React 18 SPA served by the container. Built with `VITE_API_BASE_URL=http://localhost:8080/api` and `VITE_CHATBOT_API_URL=http://localhost:5000`. |
+
+Watch startup logs in real time:
+
+```bash
+docker compose logs -f backend
+```
+
+### Verify the API health check
+
+Once the backend container is running, confirm it is responding:
+
+```bash
+curl http://localhost:8080/api/auth/health
+```
+
+A successful response looks like this:
+
+```json
+{
+  "status": "OK",
+  "message": "Auth service is running",
+  "timestamp": 1718000000000
+}
+```
+
+If you get a connection-refused error, the backend container may still be waiting for MySQL. Run `docker compose logs backend` to check progress.
+
+### First login
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+<Tabs>
+  <Tab title="Use the bootstrap admin">
+    On a fresh database, `DefaultAdminBootstrap` creates an admin account using the `EW_BOOTSTRAP_ADMIN_*` values from your `.env`. The account is pre-verified, so you can log in immediately at `http://localhost:3000` with the email or username you configured.
+  </Tab>
+  <Tab title="Register a new account">
+    Click **Register** and choose the **Student** or **Instructor** role. Admin accounts cannot be created through public registration — only the bootstrap mechanism or an existing admin can elevate a user to admin.
+
+    After submitting the form, check the inbox of the email you registered with for a verification link. You must click it before you can log in. If `EMAIL_ENABLED=false` in your `.env`, verification is skipped and you can log in immediately.
+  </Tab>
+</Tabs>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Running components without Docker
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+Use this approach when you want live-reload for active development on the frontend or backend.
+
+<CodeGroup>
+
+```bash Frontend (macOS / Linux)
+cd frontend
+npm ci
+npm run dev
+# Vite dev server starts at http://localhost:5173
+# VITE_API_BASE_URL must be set in frontend/.env.local or your shell
+```
+
+```bash Frontend (Windows)
+cd frontend
+npm ci
+npm run dev
+```
+
+```bash Backend (macOS / Linux)
+cd backend
+chmod +x mvnw
+./mvnw spring-boot:run
+# Spring Boot starts at http://localhost:8080
+# Reads DB_URL, JWT_SECRET, etc. from the .env at the repo root or your shell
+```
+
+```bash Backend (Windows)
+cd backend
+mvnw.cmd spring-boot:run
+```
+
+```bash Chatbot (all platforms)
+cd chatbot
+npm ci
+npm start
+# Express server starts at http://localhost:5000
+# Reads GENAI_API_KEY from the root .env
+```
+
+</CodeGroup>
+
+<Note>
+CORS is configured in `SecurityConfig.java` with `allowedOriginPatterns("*")` and `allowCredentials(true)`. This is intentionally wide-open for local development. Before deploying to a public environment, replace the wildcard with your production frontend origin (e.g., `https://app.examwizards.com`) to prevent cross-origin credential leaks.
+</Note>

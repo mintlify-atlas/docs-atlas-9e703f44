@@ -1,0 +1,340 @@
+---
+title: "CI/CD: GitHub Actions and Jenkins Pipeline Configuration"
+sidebarTitle: "CI/CD"
+description: "Configure the GitHub Actions pipeline for Maven, Vite, and Terraform validate jobs, plus the optional Jenkins gate for image builds, registry push, and manual promotion."
+---
+
+Examwizards uses two complementary CI systems: **GitHub Actions** as the primary pipeline that runs on every push and pull request to `main`/`master`, and an optional **Jenkins** pipeline that acts as an enterprise gate for building and promoting container images to a registry. Actions handles build verification and Terraform validation; Jenkins owns image construction, security scanning hooks, and the manual approval step before production promotion.
+
+## GitHub Actions (`ci.yml`)
+
+The primary workflow lives at `.github/workflows/ci.yml`. It triggers on push and pull request events targeting `main` or `master`, and uses a `cancel-in-progress` concurrency group so stale runs are automatically cancelled when a newer commit arrives.
+
+```yaml
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+```
+
+### Jobs
+
+| Job | Runner | Toolchain | What it does |
+|---|---|---|---|
+| `backend` | `ubuntu-latest` | Java 17 (Temurin), Maven wrapper | `./mvnw -B verify -DskipTests` — compiles and runs the Maven lifecycle |
+| `frontend` | `ubuntu-latest` | Node 20, npm | `npm ci` then `npm run build` with `VITE_CHATBOT_API_URL=http://localhost:5000` |
+| `chatbot` | `ubuntu-latest` | Node 20, npm | `npm ci` then `node --check server.js` — syntax validation without a live Gemini key |
+| `terraform-aws` | `ubuntu-latest` | Terraform 1.7.5 | `terraform fmt -check -recursive` then `terraform init -backend=false` + `terraform validate` on `infra/aws/terraform` |
+| `terraform-azure` | `ubuntu-latest` | Terraform 1.7.5 | `terraform fmt -check -recursive` then `terraform init -backend=false` + `terraform validate` on `infra/azure/terraform` |
+
+<Tabs>
+  <Tab title="backend job">
+    ```yaml
+    backend:
+      name: Backend (Maven)
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+
+        - uses: actions/setup-java@v4
+          with:
+            distribution: temurin
+            java-version: "17"
+            cache: maven
+
+        - name: Build and test
+          working-directory: backend
+          run: chmod +x mvnw && ./mvnw -B verify -DskipTests
+    ```
+  </Tab>
+  <Tab title="frontend job">
+    ```yaml
+    frontend:
+      name: Frontend (Vite)
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+
+        - uses: actions/setup-node@v4
+          with:
+            node-version: "20"
+            cache: npm
+            cache-dependency-path: frontend/package-lock.json
+
+        - name: Install and build
+          working-directory: frontend
+          env:
+            VITE_CHATBOT_API_URL: http://localhost:5000
+          run: |
+            npm ci
+            npm run build
+    ```
+  </Tab>
+  <Tab title="chatbot job">
+    ```yaml
+    chatbot:
+      name: Chatbot (Node)
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+
+        - uses: actions/setup-node@v4
+          with:
+            node-version: "20"
+            cache: npm
+            cache-dependency-path: chatbot/package-lock.json
+
+        - name: Install and verify
+          working-directory: chatbot
+          env:
+            GENAI_API_KEY: ci-placeholder-not-used-at-runtime
+          run: |
+            npm ci
+            node --check server.js
+    ```
+
+    The `GENAI_API_KEY` is set to a placeholder string so the Node module loads without failing on a missing environment variable. The `--check` flag parses the source for syntax errors without executing it, so no real API call is made.
+  </Tab>
+  <Tab title="terraform jobs">
+    ```yaml
+    terraform-aws:
+      name: Terraform fmt and validate (AWS)
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+
+        - uses: hashicorp/setup-terraform@v3
+          with:
+            terraform_version: "1.7.5"
+
+        - name: Format check
+          run: terraform fmt -check -recursive infra/aws/terraform
+
+        - name: Init and validate
+          working-directory: infra/aws/terraform
+          run: |
+            terraform init -backend=false -input=false
+            terraform validate
+    ```
+
+    The `terraform-azure` job is identical but runs against `infra/azure/terraform`. Both use `-backend=false` so no S3 bucket or DynamoDB table is required in CI.
+  </Tab>
+</Tabs>
+
+### Terraform plan on pull requests
+
+A second workflow, `.github/workflows/terraform-plan-aws.yml`, runs a read-only `terraform plan` on any PR that touches `infra/aws/terraform/**`. It is gated on the `TF_AWS_ROLE_ARN` repository variable — if the variable is empty, the plan step is skipped and a workflow notice is printed instead.
+
+```yaml
+- name: Configure AWS credentials (OIDC)
+  id: aws
+  if: ${{ vars.TF_AWS_ROLE_ARN != '' }}
+  uses: aws-actions/configure-aws-credentials@v4
+  with:
+    role-to-assume: ${{ vars.TF_AWS_ROLE_ARN }}
+    aws-region: ${{ vars.TF_AWS_REGION || 'us-east-1' }}
+
+- name: Terraform plan
+  if: ${{ vars.TF_AWS_ROLE_ARN != '' }}
+  working-directory: infra/aws/terraform
+  run: terraform plan -no-color -input=false
+```
+
+The workflow requests the `id-token: write` permission so the GitHub Actions OIDC provider can exchange a short-lived token for AWS credentials — no long-lived access keys are stored as secrets.
+
+<Tip>
+  Setting up the GitHub → AWS trust takes about 10 minutes. Create an IAM OIDC identity provider for `token.actions.githubusercontent.com`, create a role trusted by that provider scoped to your repository, then set `TF_AWS_ROLE_ARN` in **GitHub → Settings → Secrets and variables → Actions → Variables**. Full instructions are in `infra/aws/docs/github-oidc-for-actions.md`.
+</Tip>
+
+## Jenkins (`Jenkinsfile`)
+
+The Jenkinsfile provides an optional enterprise gate for building Docker images and pushing them to a container registry. It is a parameterized, declarative pipeline that runs one build at a time (`disableConcurrentBuilds()`).
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `REGISTRY_TARGET` | Choice | `dockerhub` | `dockerhub` or `ecr` — controls which push path runs |
+| `IMAGE_NAME` | String | `examwizards-api` | ECR repository name or Docker Hub image name |
+| `IMAGE_TAG` | String | `1.0.0` | Image tag — use a git SHA in production |
+| `SKIP_TESTS` | Boolean | `false` | Skip the Maven `verify` stage when `true` |
+
+### Pipeline stages
+
+<Steps>
+  <Step title="Checkout">
+    ```groovy
+    stage('Checkout') {
+        steps {
+            checkout scm
+        }
+    }
+    ```
+    Standard SCM checkout. Runs unconditionally.
+  </Step>
+
+  <Step title="Backend unit tests">
+    ```groovy
+    stage('Backend unit tests') {
+        when {
+            not { expression { return params.SKIP_TESTS } }
+        }
+        steps {
+            dir('backend') {
+                sh './mvnw -B verify -DskipTests'
+            }
+        }
+    }
+    ```
+    Skipped when `SKIP_TESTS` is `true`. Uses the Maven wrapper for consistent toolchain behaviour across agents.
+  </Step>
+
+  <Step title="Chatbot verify">
+    ```groovy
+    stage('Chatbot verify') {
+        steps {
+            dir('chatbot') {
+                sh '''
+                    npm ci
+                    node --check server.js
+                '''
+            }
+        }
+    }
+    ```
+    Mirrors the GitHub Actions chatbot job — installs production deps and performs a syntax-only check.
+  </Step>
+
+  <Step title="Build API image">
+    ```groovy
+    stage('Build API image') {
+        steps {
+            script {
+                docker.build(
+                    "${params.IMAGE_NAME}:${params.IMAGE_TAG}",
+                    "-f backend/Dockerfile backend"
+                )
+            }
+        }
+    }
+    ```
+    Builds the Spring Boot image using `backend/Dockerfile` with the `backend/` directory as the build context.
+  </Step>
+
+  <Step title="Build Chatbot image">
+    ```groovy
+    stage('Build Chatbot image') {
+        steps {
+            script {
+                docker.build(
+                    "examwizards-chatbot:${params.IMAGE_TAG}",
+                    "-f chatbot/Dockerfile chatbot"
+                )
+            }
+        }
+    }
+    ```
+    The chatbot image name is always `examwizards-chatbot`; only the tag is parameterized.
+  </Step>
+
+  <Step title="Security scan (optional)">
+    The pipeline includes a placeholder stage for attaching Trivy or ECR image scanning:
+
+    ```groovy
+    stage('Security scan (optional)') {
+        steps {
+            echo 'Attach Trivy or ECR image scanning here; fail build on critical CVEs.'
+        }
+    }
+    ```
+
+    Replace the `echo` with a `sh 'trivy image --exit-code 1 --severity CRITICAL ...'` call once you have Trivy installed on your Jenkins agent.
+  </Step>
+
+  <Step title="Push to registry">
+    The push stage branches on `REGISTRY_TARGET`:
+
+    ```groovy
+    stage('Push image') {
+        steps {
+            script {
+                if (params.REGISTRY_TARGET == 'dockerhub') {
+                    docker.withRegistry('https://index.docker.io/v1/', 'dockerhub-creds') {
+                        docker.image("${params.IMAGE_NAME}:${params.IMAGE_TAG}").push()
+                    }
+                } else {
+                    // ECR: configure aws ecr get-login-password and docker push
+                    // See deploy/scripts/push-ecr.example.sh for the shell operations
+                    echo 'ECR push: wire aws-credentials plugin and ecr get-login-password here.'
+                }
+            }
+        }
+    }
+    ```
+
+    For Docker Hub, the `dockerhub-creds` Jenkins credential (username + password) must be configured in **Manage Jenkins → Credentials**. For ECR, wire the AWS credentials plugin and replicate the login steps from `deploy/scripts/push-ecr.example.sh`.
+  </Step>
+
+  <Step title="Manual approval gate (production only)">
+    ```groovy
+    stage('Manual approval (production only)') {
+        when {
+            expression { false }   // disabled by default — change condition to enable
+        }
+        steps {
+            input message: 'Deploy to production?', ok: 'Promote'
+        }
+    }
+    ```
+
+    The gate is present in the Jenkinsfile but disabled by default (`expression { false }`). To activate it for production promotions, change the `when` condition to match your production branch or registry target, for example:
+
+    ```groovy
+    when {
+        expression { params.REGISTRY_TARGET == 'ecr' }
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  In production ECS task definitions, always reference images by their **immutable digest** rather than a floating `:latest` tag. Digests are stable across re-pushes and make rollbacks deterministic:
+
+  ```
+  123456789012.dkr.ecr.us-east-1.amazonaws.com/examwizards-api@sha256:abc123...
+  ```
+
+  The `deploy/scripts/push-ecr.example.sh` script derives `IMAGE_TAG` from `git rev-parse --short HEAD` by default, which is a good intermediate step. Capture the pushed digest with `docker inspect --format='{{index .RepoDigests 0}}'` and embed it in your task definition registration call for fully immutable deployments.
+</Note>
+
+## Workflow summary
+
+```
+Push / PR to main
+       │
+       ├─► GitHub Actions ci.yml
+       │       ├── backend   (Maven verify)
+       │       ├── frontend  (Vite build)
+       │       ├── chatbot   (node --check)
+       │       ├── terraform-aws   (fmt + validate)
+       │       └── terraform-azure (fmt + validate)
+       │
+       └─► PR touching infra/aws/terraform/**
+               └── terraform-plan-aws.yml
+                       └── terraform plan (requires TF_AWS_ROLE_ARN)
+
+Jenkins (triggered manually or on tag)
+       ├── Checkout
+       ├── Backend unit tests  (skippable)
+       ├── Chatbot verify
+       ├── Build API image
+       ├── Build Chatbot image
+       ├── Security scan       (stub — attach Trivy)
+       ├── Push to DockerHub or ECR
+       └── Manual approval gate (disabled by default)
+```

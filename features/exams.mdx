@@ -1,0 +1,268 @@
+---
+title: "Exams: Build Timed Assessments and Auto-Grade Submissions"
+sidebarTitle: "Exams"
+description: "Instructors build timed exams attached to a course, add MCQ and text questions, and let the server auto-grade submissions and email results directly to students."
+---
+
+Exams in Examwizards are tightly coupled to courses — every exam belongs to exactly one course, and students can only see and submit exams for courses they are enrolled in. Instructors create exams with a duration, optional start/end windows, and a set of questions that can be multiple-choice (single or multi-select) or free-text. When a student submits, the server scores MCQ answers automatically, stores the result, and sends an HTML email with the student's score, percentage, and feedback.
+
+## Exam Model
+
+<CardGroup cols={2}>
+  <Card title="Timing" icon="clock">
+    `duration` (minutes) controls the in-exam countdown timer. `startDate`/`startTime` and `endDate`/`endTime` define the window during which the exam is accessible.
+  </Card>
+  <Card title="Questions" icon="list">
+    Each question has a `type` (`mcq`, `multiple`, or text), a `marks` value, a list of `options`, and a `correct_options` index list used for auto-grading.
+  </Card>
+  <Card title="Status" icon="signal">
+    Derived at runtime: `upcoming` (before start), `active` (within window), `completed` (after end), or `inactive` (not yet published).
+  </Card>
+  <Card title="Results" icon="chart-bar">
+    Scores are stored in the `Result` entity. Percentage, pass/fail (≥ 60%), and personalised feedback are all computed server-side.
+  </Card>
+</CardGroup>
+
+## Creating an Exam
+
+`POST /api/exams` accepts a JSON body. The `course` object must include a valid course `id` that the instructor owns.
+
+```bash
+curl -X POST http://localhost:8080/api/exams \
+  -H "Authorization: Bearer <instructor_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Midterm Algebra Quiz",
+    "description": "Covers chapters 1–4 including linear equations.",
+    "duration": 60,
+    "startDate": "2025-09-01",
+    "startTime": "09:00",
+    "endDate": "2025-09-01",
+    "endTime": "23:59",
+    "instructions": "No calculators. Each MCQ is worth 2 marks.",
+    "isactive": true,
+    "totalMarks": 20,
+    "course": { "id": 12 },
+    "questions": [
+      {
+        "question": "What is the value of x in 2x + 4 = 10?",
+        "type": "mcq",
+        "marks": 2,
+        "options": [
+          { "availableOption": "2" },
+          { "availableOption": "3" },
+          { "availableOption": "4" },
+          { "availableOption": "5" }
+        ],
+        "correct_options": [1]
+      }
+    ]
+  }'
+```
+
+<Note>
+  `correct_options` contains zero-based **indices** into the `options` array, not option IDs. Index `1` means the second option — `"3"` in the example above.
+</Note>
+
+## Listing Exams
+
+<Accordion title="GET /api/exams — All exams (admin/debug)">
+  Returns every exam in the system as a flat list. Typically used by admins or during development.
+
+  ```bash
+  curl http://localhost:8080/api/exams \
+    -H "Authorization: Bearer <token>"
+  ```
+</Accordion>
+
+<Accordion title="GET /api/exams/instructor — Instructor's exams">
+  Returns all exams belonging to courses owned by the authenticated instructor, enhanced with student counts, question counts, computed status, and time-remaining data.
+
+  ```bash
+  curl http://localhost:8080/api/exams/instructor \
+    -H "Authorization: Bearer <instructor_token>"
+  ```
+
+  ```json
+  [
+    {
+      "exam_id": 7,
+      "title": "Midterm Algebra Quiz",
+      "duration": 60,
+      "questionCount": 10,
+      "questionsDisplay": "10 questions",
+      "totalMarks": 20,
+      "studentCount": 42,
+      "status": "upcoming",
+      "courseName": "Introduction to Algebra",
+      "dueDateTime": "Due: 01 Sep 2025 at 11:59 PM"
+    }
+  ]
+  ```
+</Accordion>
+
+<Accordion title="GET /api/exams/course/{courseId} — Exams for a course">
+  Returns all exams attached to a specific course.
+
+  ```bash
+  curl http://localhost:8080/api/exams/course/12 \
+    -H "Authorization: Bearer <token>"
+  ```
+</Accordion>
+
+<Accordion title="GET /api/exams/student/enrolled — Student's accessible exams">
+  Returns exams from every course the authenticated student is enrolled in.
+
+  ```bash
+  curl http://localhost:8080/api/exams/student/enrolled \
+    -H "Authorization: Bearer <student_token>"
+  ```
+</Accordion>
+
+## Fetching a Single Exam
+
+`GET /api/exams/{id}` returns full exam details including all questions and a list of students who have already submitted:
+
+```bash
+curl http://localhost:8080/api/exams/7 \
+  -H "Authorization: Bearer <token>"
+```
+
+## Updating and Deleting
+
+```bash
+# Update an exam
+curl -X PUT http://localhost:8080/api/exams/7 \
+  -H "Authorization: Bearer <instructor_token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "title": "Midterm Algebra Quiz — Revised", "duration": 75, "course": { "id": 12 } }'
+
+# Delete an exam
+curl -X DELETE http://localhost:8080/api/exams/7 \
+  -H "Authorization: Bearer <instructor_token>"
+```
+
+## Access Control
+
+### Check student access to an exam
+
+`GET /api/exams/{examId}/access` tells the client whether the currently authenticated student may take the exam and whether they have already submitted:
+
+```bash
+curl http://localhost:8080/api/exams/7/access \
+  -H "Authorization: Bearer <student_token>"
+```
+
+```json
+{
+  "hasAccess": true,
+  "hasSubmitted": false,
+  "examTitle": "Midterm Algebra Quiz",
+  "courseId": 12,
+  "courseName": "Introduction to Algebra",
+  "courseVisibility": "PUBLIC"
+}
+```
+
+<Note>
+  Students can only access exams from courses they are enrolled in. For public courses this means an active enrollment record; for private courses the student's email must appear in the course allowlist.
+</Note>
+
+### Get all exams allowed for an email
+
+`GET /api/exams/allowed/{email}` returns every exam accessible to the user with that email address, checking both enrollment and private allowlists:
+
+```bash
+curl http://localhost:8080/api/exams/allowed/jane@example.com \
+  -H "Authorization: Bearer <token>"
+```
+
+## Submitting an Exam
+
+`POST /api/exams/{id}/submit` accepts a map of question IDs to answer strings. The server auto-grades MCQ answers (supporting comparison by option text, index, or option ID), computes a percentage, determines pass/fail at 60%, generates feedback, stores a `Result` record, and emails the student an HTML result notification.
+
+```bash
+curl -X POST http://localhost:8080/api/exams/7/submit \
+  -H "Authorization: Bearer <student_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "answers": {
+      "101": "3",
+      "102": "Paris",
+      "103": "True"
+    },
+    "timeTaken": 45
+  }'
+```
+
+**Successful response (HTTP 200):**
+
+```json
+{
+  "success": true,
+  "message": "Exam submitted successfully",
+  "result_id": 88,
+  "exam_id": 7,
+  "exam_title": "Midterm Algebra Quiz",
+  "score": 16.0,
+  "total_marks": 20,
+  "percentage": 80.0,
+  "passed": true,
+  "total_questions": 10,
+  "answered_questions": 10,
+  "completion_percentage": 100,
+  "time_taken": 45,
+  "feedback": "You scored 16.0 out of 20.0 marks (80.0%). Great job! Very good performance.",
+  "submitted_at": "2025-09-01T10:45:00"
+}
+```
+
+<Note>
+  An HTML result email is dispatched to the student's registered email address immediately after submission. A failure to send the email does **not** cause the submission itself to fail.
+</Note>
+
+## Question CRUD
+
+Questions can also be managed independently through `POST /api/exams` (inline with the exam body) or via the dedicated question endpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/questions` | List all questions |
+| `GET` | `/api/questions/{id}` | Get a question by ID |
+| `POST` | `/api/questions` | Create a standalone question |
+| `PUT` | `/api/questions/{id}` | Update a question |
+| `DELETE` | `/api/questions/{id}` | Delete a question |
+
+```bash
+# Create a question
+curl -X POST http://localhost:8080/api/questions \
+  -H "Authorization: Bearer <instructor_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "Which planet is closest to the Sun?",
+    "type": "mcq",
+    "marks": 1,
+    "options": [
+      { "availableOption": "Venus" },
+      { "availableOption": "Mercury" },
+      { "availableOption": "Earth" }
+    ],
+    "correct_options": [1]
+  }'
+```
+
+## Endpoint Reference
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/exams` | Instructor | Create a new exam |
+| `GET` | `/api/exams` | Any | List all exams |
+| `GET` | `/api/exams/{id}` | Any | Get an exam with questions |
+| `PUT` | `/api/exams/{id}` | Instructor | Update an exam |
+| `DELETE` | `/api/exams/{id}` | Instructor | Delete an exam |
+| `GET` | `/api/exams/instructor` | Instructor | List instructor's exams |
+| `GET` | `/api/exams/course/{courseId}` | Any | List exams for a course |
+| `GET` | `/api/exams/student/enrolled` | Student | List exams for enrolled courses |
+| `GET` | `/api/exams/{examId}/access` | Student | Check access and submission status |
+| `GET` | `/api/exams/allowed/{email}` | Any | List exams accessible to an email |
+| `POST` | `/api/exams/{id}/submit` | Student | Submit answers and receive grade |

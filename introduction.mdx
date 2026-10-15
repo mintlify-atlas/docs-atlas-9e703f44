@@ -1,0 +1,59 @@
+---
+title: "Examwizards: Role-Based Learning Platform Overview"
+sidebarTitle: "Introduction"
+description: "Examwizards unifies students, instructors, and admins on a Spring Boot + React platform with timed exams, auto-grading, Razorpay payments, and JWT auth."
+---
+
+Examwizards is a full-stack, role-based online learning platform that brings students, instructors, and administrators together under a single, unified interface. Students browse a public course catalog, enroll in free or paid courses, sit timed assessments, and track their performance on real-time leaderboards. Instructors create and manage courses, design multi-question exams, bulk-import questions from Excel, and review class analytics. Administrators oversee every user account, course, and transaction across the whole platform from a dedicated dashboard. Every user flow is secured with stateless JWT authentication, BCrypt password hashing, and mandatory email verification before first login.
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| API | Spring Boot 2.7, Java 17, Spring Security, JWT, JPA / Hibernate |
+| UI | React 18, TypeScript, Vite, Tailwind CSS, MUI, React Router 7 |
+| Data | MySQL 8 (RDS-compatible), Hibernate `ddl-auto` (Flyway migrations in-repo) |
+| Payments | Razorpay (order creation + webhook verification) |
+| Email | Gmail SMTP — registration verification, password reset, admin notifications |
+| AI Chatbot | Google Gemini (`gemini-2.5-flash`) via a standalone Node.js microservice |
+| Containers | Multi-stage Dockerfiles, Docker Compose for local dev |
+| Cloud | AWS ECS Fargate, RDS, ElastiCache, S3, CloudFront, WAF, Secrets Manager |
+| IaC | Terraform (under `infra/aws/terraform/`) |
+| CI/CD | GitHub Actions + optional Jenkins gate for production promotion |
+
+## Key Capabilities
+
+**Timed exams & auto-grading** — Every exam carries a configurable duration. The backend scores submissions automatically and publishes results to the student dashboard the moment time expires.
+
+**Razorpay payment flow** — Paid course enrollments create a Razorpay order server-side; the React client completes the checkout and the backend verifies the payment signature before granting access.
+
+**Email verification** — New accounts receive a verification link via Gmail SMTP. Login is blocked until the link is clicked, preventing spam registrations.
+
+**JWT stateless auth** — HS256 tokens (minimum 32-character secret) carry the user's role claim. Spring Security RBAC enforces route-level access for `ROLE_STUDENT`, `ROLE_INSTRUCTOR`, and `ROLE_ADMIN` throughout the API.
+
+**Gemini chatbot** — A separate Node.js process wraps the `@google/genai` SDK and exposes `POST /api/ask`. It maintains a per-session conversation history and answers questions scoped to the Examwizards platform.
+
+**Bootstrap admin** — On a fresh database startup, `DefaultAdminBootstrap` automatically creates the first admin account from the `EW_BOOTSTRAP_ADMIN_*` environment variables so the platform is never locked out.
+
+## Explore the Docs
+
+<CardGroup cols={3}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone, configure, and run Examwizards locally with Docker Compose in five minutes.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Understand the layered Spring Boot + React + AWS topology and chatbot microservice.
+  </Card>
+  <Card title="Student Role" icon="graduation-cap" href="/roles/student">
+    Catalog browsing, enrollment, timed exams, results, and leaderboards.
+  </Card>
+  <Card title="Instructor Role" icon="chalkboard-teacher" href="/roles/instructor">
+    Course CRUD, exam lifecycle, question bank, grading, and analytics.
+  </Card>
+  <Card title="Admin Role" icon="shield-halved" href="/roles/admin">
+    User management, platform oversight, contact inbox, and review moderation.
+  </Card>
+  <Card title="API Overview" icon="code" href="/api/overview">
+    REST endpoints, authentication headers, request/response shapes.
+  </Card>
+</CardGroup>

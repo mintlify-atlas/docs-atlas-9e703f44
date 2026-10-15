@@ -1,0 +1,262 @@
+---
+title: "Auth API: Register, Login, and Password Reset Endpoints"
+sidebarTitle: "Auth"
+description: "Complete reference for all /api/auth endpoints covering user registration, JWT-based login, email verification, password reset, and re-sending verification emails."
+---
+
+The Auth API is the entry point for every Examwizards user. It handles new account creation (students and instructors only — admin accounts are provisioned separately), issues signed JWT tokens on login, and manages the full email-verification and password-reset lifecycle. Every request that modifies sensitive state sends a transactional email to the user's registered address.
+
+---
+
+## GET /api/auth/health
+
+Returns a simple liveness check confirming the Auth service is reachable. No authentication is required and the response includes a server-side millisecond timestamp.
+
+**Auth**: Public — no token required.
+
+**Response** `200 OK`
+
+<ResponseField name="status" type="string">
+  Always `"OK"` when the service is running.
+</ResponseField>
+<ResponseField name="message" type="string">
+  Human-readable confirmation string.
+</ResponseField>
+<ResponseField name="timestamp" type="number">
+  Unix epoch milliseconds at the time of the request.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/auth/health
+```
+
+---
+
+## POST /api/auth/register
+
+Creates a new user account. Only `student` and `instructor` roles are accepted — attempting to register an `admin` account returns `400 Bad Request`. If the username, email, or phone number is already in use the request is rejected with a descriptive error. After a successful save the server attempts to send a verification email; login is blocked until the email is verified.
+
+**Auth**: Public — no token required.
+
+<ParamField body="username" type="string" required>
+  Unique display name for the new account. Rejected if already taken.
+</ParamField>
+<ParamField body="email" type="string" required>
+  Valid email address used for verification and notifications. Must be unique.
+</ParamField>
+<ParamField body="password" type="string" required>
+  Plain-text password; stored as a BCrypt hash. Choose a strong value — resets require email access.
+</ParamField>
+<ParamField body="role" type="string" required>
+  Must be `"student"` or `"instructor"` (case-insensitive). Any other value, including `"admin"`, is rejected.
+</ParamField>
+<ParamField body="phoneNumber" type="string">
+  Optional 10-digit phone number. Must be unique across all accounts.
+</ParamField>
+<ParamField body="fullName" type="string">
+  Optional display name shown in the UI and result notifications.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="username" type="string">
+  The registered username.
+</ResponseField>
+<ResponseField name="role" type="string">
+  Normalised role string (`"student"` or `"instructor"`).
+</ResponseField>
+<ResponseField name="emailVerified" type="boolean">
+  Always `false` immediately after registration.
+</ResponseField>
+<ResponseField name="verificationEmailSent" type="boolean">
+  `true` if the verification email was dispatched successfully.
+</ResponseField>
+<ResponseField name="message" type="string">
+  Human-readable next-step instruction for the user.
+</ResponseField>
+<ResponseField name="fullName" type="string">
+  Echoed back if provided.
+</ResponseField>
+<ResponseField name="avatarUrl" type="string">
+  Avatar URL if provided, otherwise `null`.
+</ResponseField>
+<ResponseField name="gender" type="string">
+  Gender if provided, otherwise `null`.
+</ResponseField>
+<ResponseField name="phoneNumber" type="string">
+  Phone number if provided, otherwise `null`.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:8080/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "username": "jdoe",
+    "email": "jdoe@example.com",
+    "password": "Secret123!",
+    "role": "student",
+    "phoneNumber": "9876543210",
+    "fullName": "Jane Doe"
+  }'
+```
+
+---
+
+## POST /api/auth/login
+
+Authenticates a user by username **or** email plus password. Returns a signed JWT on success. The token must be included as a `Bearer` header on all authenticated requests. Login is blocked with `403` if the account's email has not yet been verified.
+
+**Auth**: Public — no token required.
+
+<ParamField body="username" type="string" required>
+  The user's registered username **or** email address (both are accepted for this field).
+</ParamField>
+<ParamField body="password" type="string" required>
+  The account's plain-text password, matched against the stored BCrypt hash.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="token" type="string">
+  Signed JWT. Include as `Authorization: Bearer <token>` on subsequent requests.
+</ResponseField>
+<ResponseField name="username" type="string">
+  The authenticated user's username.
+</ResponseField>
+<ResponseField name="role" type="string">
+  The account's role: `"student"`, `"instructor"`, or `"admin"`.
+</ResponseField>
+<ResponseField name="fullName" type="string">
+  Display name of the user.
+</ResponseField>
+<ResponseField name="avatarUrl" type="string">
+  Profile picture URL, or `null` if not set.
+</ResponseField>
+<ResponseField name="gender" type="string">
+  Gender value stored on the profile, or `null`.
+</ResponseField>
+<ResponseField name="emailVerified" type="boolean">
+  Always `true` for a successful login response.
+</ResponseField>
+<ResponseField name="timestamp" type="number">
+  Unix epoch milliseconds at login time.
+</ResponseField>
+
+<Note>
+  A `403` response with `"emailVerified": false` means the account exists but the verification link has not been clicked. Use `POST /api/auth/resend-verification` to trigger a new email.
+</Note>
+
+```bash
+curl -X POST http://localhost:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username": "jdoe", "password": "Secret123!"}'
+```
+
+---
+
+## GET /api/auth/verify-email
+
+Confirms an account's email address using the single-use token delivered in the registration email. Once verified the user can log in normally. Tokens that are missing, already used, or expired return `400 Bad Request`.
+
+**Auth**: Public — no token required.
+
+<ParamField query="token" type="string" required>
+  The verification token extracted from the link in the registration email.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="success" type="boolean">
+  `true` when the email was verified; `false` on failure.
+</ResponseField>
+<ResponseField name="message" type="string">
+  Confirmation or failure description.
+</ResponseField>
+
+```bash
+curl "http://localhost:8080/api/auth/verify-email?token=abc123xyz"
+```
+
+---
+
+## POST /api/auth/request-password-reset
+
+Triggers a password-reset email to the supplied address. For security the response does not confirm whether the address exists in the system when the account is not found — a `400` with `"No account found"` is returned in that case. No authentication is required.
+
+**Auth**: Public — no token required.
+
+<ParamField body="email" type="string" required>
+  The email address associated with the account that needs a password reset.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="success" type="boolean">
+  `true` when the reset email was sent.
+</ResponseField>
+<ResponseField name="message" type="string">
+  Instruction prompting the user to check their inbox.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:8080/api/auth/request-password-reset \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "jdoe@example.com"}'
+```
+
+---
+
+## POST /api/auth/reset-password
+
+Applies a new password using the reset token received via email. The new password must be at least 6 characters. Tokens that are invalid or expired return `400 Bad Request`.
+
+**Auth**: Public — no token required.
+
+<ParamField body="token" type="string" required>
+  The password-reset token from the email link.
+</ParamField>
+<ParamField body="newPassword" type="string" required>
+  The desired new password. Minimum length: 6 characters.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="success" type="boolean">
+  `true` when the password was updated successfully.
+</ResponseField>
+<ResponseField name="message" type="string">
+  Confirmation that the user may now log in with the new password.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:8080/api/auth/reset-password \
+  -H 'Content-Type: application/json' \
+  -d '{"token": "reset-token-xyz", "newPassword": "NewPass456!"}'
+```
+
+---
+
+## POST /api/auth/resend-verification
+
+Resends the email verification link to an unverified account. If the account is already verified the endpoint returns `200` with a success message rather than an error, making it safe to call idempotently.
+
+**Auth**: Public — no token required.
+
+<ParamField body="email" type="string" required>
+  The email address of the account that needs a new verification link.
+</ParamField>
+
+**Response** `200 OK`
+
+<ResponseField name="success" type="boolean">
+  `true` when the email was dispatched (or the account was already verified).
+</ResponseField>
+<ResponseField name="message" type="string">
+  Status description — either a send confirmation or an "already verified" notice.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:8080/api/auth/resend-verification \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "jdoe@example.com"}'
+```

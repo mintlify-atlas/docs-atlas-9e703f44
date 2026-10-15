@@ -1,0 +1,113 @@
+---
+title: "Environment Variables Reference for Examwizards"
+sidebarTitle: "Environment Variables"
+description: "All env vars Examwizards needs: MySQL, Gmail SMTP, Razorpay, Gemini AI, JWT signing secret, bootstrap admin credentials, and Vite build-time frontend vars."
+---
+
+Examwizards is configured entirely through environment variables — there are no hard-coded secrets in source. At runtime the application reads these from a `.env` file at the repository root (Docker Compose picks it up automatically) or from the host environment (ECS task definitions, Azure App Service, etc.). Copy `.env.example` to `.env` and populate each value before starting any service.
+
+<Warning>
+  Never commit your `.env` file to version control. The repository `.gitignore` already excludes it, but double-check before pushing. A committed secret cannot be made safe by a later deletion — rotate it immediately.
+</Warning>
+
+## Database
+
+These three variables are required by every backend startup. In Docker Compose the `DB_URL` hostname is `mysql` (the service name); for local bare-metal runs it is typically `localhost`.
+
+<ParamField query="DB_URL" type="string" required>
+  JDBC connection URL for MySQL 8. Example: `jdbc:mysql://localhost:3306/examwizards`. In Docker Compose this is overridden to `jdbc:mysql://mysql:3306/examwizards` automatically by the service definition.
+</ParamField>
+
+<ParamField query="DB_USERNAME" type="string" required>
+  MySQL username that owns the `examwizards` database. The Compose stack creates the user `examport` by default.
+</ParamField>
+
+<ParamField query="DB_PASSWORD" type="string" required>
+  Password for `DB_USERNAME`. Also used as `MYSQL_ROOT_PASSWORD` for the MySQL container via the `${DB_PASSWORD:-root}` default in `docker-compose.yml`.
+</ParamField>
+
+## Email (Gmail SMTP)
+
+Examwizards sends transactional email (enrollment confirmations, contact acknowledgements, admin notifications) through Gmail SMTP on port 587 with STARTTLS. You need a Google account with an **App Password** — the account's normal login password will not work when 2-Step Verification is enabled.
+
+<ParamField query="EMAIL_USERNAME" type="string" required>
+  The Gmail address used to authenticate with `smtp.gmail.com`. This is the account for which you generated the app password below.
+</ParamField>
+
+<ParamField query="EMAIL_PASSWORD" type="string" required>
+  A Gmail **App Password** (16-character code from Google Account → Security → App Passwords). Do not use your regular Google account password here.
+</ParamField>
+
+<ParamField query="EMAIL_FROM" type="string" required>
+  Display sender string included in the `From` header of outgoing mail. Supports RFC 5322 format, e.g. `ExamWizards <noreply@examwizards.com>`. Maps to `app.email.from` in `application.properties`.
+</ParamField>
+
+<ParamField query="EMAIL_ENABLED" type="boolean" required>
+  Set to `true` to enable all transactional email. Set to `false` to suppress sending entirely (useful for integration tests or environments with no SMTP credentials). Maps to `app.email.enabled`.
+</ParamField>
+
+<ParamField query="EMAIL_ADMIN" type="string">
+  Email address that receives admin-level notifications (e.g. new contact-form submissions). Optional — when omitted, admin notifications are skipped. Maps to `app.email.admin`.
+</ParamField>
+
+## Payments (Razorpay)
+
+Razorpay handles payments for paid course enrollments. `RAZORPAY_KEY_ID` is sent to the browser to initialise the Razorpay checkout widget; `RAZORPAY_KEY_SECRET` stays server-side and is used to verify payment signatures. Both are required only when at least one course has a non-zero price.
+
+<ParamField query="RAZORPAY_KEY_ID" type="string" required>
+  Public key from your Razorpay Dashboard → Settings → API Keys. Safe to include in client-side code. Mapped to `razorpay.key.id` in `application.properties`.
+</ParamField>
+
+<ParamField query="RAZORPAY_KEY_SECRET" type="string" required>
+  Secret key from the same Razorpay panel. Used server-side only to verify HMAC signatures on payment callbacks. Never expose this to the browser. Mapped to `razorpay.key.secret`.
+</ParamField>
+
+## AI / Chatbot (Google Gemini)
+
+The chatbot is a standalone Node.js service (`chatbot/server.js`) that proxies requests to the Google Gemini API. It runs as a separate container on port 5000 and is called directly by the browser using `VITE_CHATBOT_API_URL`.
+
+<ParamField query="GENAI_API_KEY" type="string" required>
+  Google Gemini API key obtained from [Google AI Studio](https://aistudio.google.com/). Injected into both the `chatbot` container and the `backend` container (for any server-side Gemini calls). Required whenever the chatbot service is running.
+</ParamField>
+
+## Auth / JWT
+
+<ParamField query="JWT_SECRET" type="string" required>
+  HS256 signing secret for JSON Web Tokens. Must be **at least 32 UTF-8 characters** (256 bits). If this variable is absent or empty at startup, `JwtUtil` falls back to an ephemeral per-process key — all tokens become invalid on every restart. Set a stable value for any persistent environment.
+</ParamField>
+
+<Info>
+  JWT tokens issued by Examwizards are valid for **5 hours** (hardcoded in `JwtUtil`). The token carries the user's username and Spring role (`ROLE_ADMIN`, `ROLE_INSTRUCTOR`, or `ROLE_STUDENT`) as claims.
+</Info>
+
+## Bootstrap Admin
+
+On first startup against an empty database, `DefaultAdminBootstrap` seeds a single admin user so you can log in immediately. It skips seeding if any admin already exists in the `users` table.
+
+<ParamField query="EW_BOOTSTRAP_ADMIN_EMAIL" type="string" required>
+  Email address for the seeded admin account. Used as both the login identifier and the `email` column value. Must be unique across all users.
+</ParamField>
+
+<ParamField query="EW_BOOTSTRAP_ADMIN_PASSWORD" type="string" required>
+  Plain-text password that `DefaultAdminBootstrap` encodes with BCrypt before saving. Choose a strong value — it is the only admin credential until you create more via the admin UI.
+</ParamField>
+
+<ParamField query="EW_BOOTSTRAP_ADMIN_USERNAME" type="string" required>
+  Username for the seeded admin. Must be unique. Used as the `username` column value and as an alternative login identifier.
+</ParamField>
+
+## Frontend (Vite Build-time)
+
+Vite bakes `VITE_*` variables into the static bundle at build time — they are not read from the host at runtime. When building via Docker Compose, these are passed as `args` in the `frontend` service build block.
+
+<ParamField query="VITE_API_BASE_URL" type="string" required>
+  Base URL for all Axios calls from the React app to the Spring Boot API. Must include the `/api` path prefix and no trailing slash. Example: `http://localhost:8080/api` for local development, or your ALB/CloudFront origin for production.
+</ParamField>
+
+<ParamField query="VITE_CHATBOT_API_URL" type="string" required>
+  Public URL of the Gemini chatbot Node service. The browser calls this directly, so the URL must be reachable from the end user's network. Example: `http://localhost:5000` locally. Include the scheme; omit any trailing slash.
+</ParamField>
+
+<Tip>
+  In production on AWS, store all secrets (`DB_PASSWORD`, `JWT_SECRET`, `EMAIL_PASSWORD`, `RAZORPAY_KEY_SECRET`, `GENAI_API_KEY`) in **AWS Secrets Manager** and reference them from your ECS task definition using `secrets:` entries. This avoids embedding sensitive values in task definitions or container images, and enables rotation without a redeploy.
+</Tip>

@@ -1,0 +1,170 @@
+---
+title: "AI Chatbot: Google Gemini-Powered Study Assistant"
+sidebarTitle: "Chatbot"
+description: "A standalone Node.js microservice wraps Google Gemini 2.5 Flash to answer platform questions for students, instructors, and admins — configured with one env var."
+---
+
+The Examwizards chatbot is a dedicated Node.js microservice that exposes two HTTP endpoints and runs separately from the Spring Boot backend. It uses the `@google/genai` SDK to call Google Gemini 2.5 Flash with a context-rich system instruction that scopes every response to the Examwizards platform. The service maintains a simple in-memory conversation history per server instance so follow-up questions work naturally within a session.
+
+## Architecture
+
+<CardGroup cols={2}>
+  <Card title="Runtime" icon="server">
+    Node.js 20 (Alpine) running `server.js` with Express 5. The service is stateless between restarts — conversation history lives in memory only.
+  </Card>
+  <Card title="AI Model" icon="sparkles">
+    Google Gemini **2.5 Flash** via the `@google/genai` package. The model is constrained by a detailed system instruction covering all three user roles.
+  </Card>
+  <Card title="Port" icon="plug">
+    Listens on port **5000** by default (overridable with the `PORT` env var). In Docker Compose, mapped to host port 5000.
+  </Card>
+  <Card title="Isolation" icon="shield">
+    Runs as a separate Docker container (`examport-chatbot`) in the shared `examport-network`, so network failures in one service do not take down the other.
+  </Card>
+</CardGroup>
+
+## Endpoints
+
+### `POST /api/ask` — Ask the chatbot
+
+Accepts a JSON body with a `question` field and returns the model's response in an `answer` field. The server appends each user message and model reply to an in-memory `History` array, so the model has full context for follow-up questions.
+
+**Request:**
+
+```bash
+curl -X POST http://localhost:5000/api/ask \
+  -H "Content-Type: application/json" \
+  -d '{ "question": "How do I enroll in a course on ExamWizards?" }'
+```
+
+**Response (HTTP 200):**
+
+```json
+{
+  "answer": "To enroll in a course on ExamWizards, follow these steps:\n\n1. Log in to your student account.\n2. Navigate to the **Course Catalog** from your dashboard.\n3. Browse or search for the course you want to join.\n4. Click **Enroll** on a free course, or **Purchase** on a paid course to begin the Razorpay checkout.\n\nOnce enrolled, the course will appear in your dashboard and its exams will be available under the Exams section."
+}
+```
+
+**Error response (HTTP 500):**
+
+```json
+{
+  "error": "API key not valid. Please pass a valid API key."
+}
+```
+
+### `GET /health` — Health check
+
+Returns the service status. Used by Docker Compose and load balancers to confirm the container is accepting requests.
+
+```bash
+curl http://localhost:5000/health
+```
+
+```json
+{
+  "status": "ok",
+  "service": "examwizards-chatbot"
+}
+```
+
+## Configuration
+
+The chatbot requires exactly one environment variable:
+
+| Variable | Description |
+|----------|-------------|
+| `GENAI_API_KEY` | Google Gemini API key obtained from [Google AI Studio](https://aistudio.google.com/) |
+| `PORT` | *(Optional)* HTTP port to listen on. Defaults to `5000` |
+
+<Note>
+  A valid `GENAI_API_KEY` is required. The server calls `process.exit(1)` on startup if the variable is missing. Obtain a free key at [aistudio.google.com](https://aistudio.google.com/) — no billing account is required for development quotas.
+</Note>
+
+The service reads environment variables from the project-root `.env` file as well as `backend/.env` using `dotenv`:
+
+```javascript
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+require("dotenv").config({ path: path.join(__dirname, "..", "backend", ".env") });
+```
+
+So adding `GENAI_API_KEY` to either `.env` file at the repo root is sufficient for local development.
+
+## Frontend Integration
+
+The React frontend reads the chatbot URL from the `VITE_CHATBOT_API_URL` build-time environment variable and calls `POST /api/ask` directly from the browser. In Docker Compose this is injected as a build argument:
+
+```yaml
+# docker-compose.yml (excerpt)
+frontend:
+  build:
+    args:
+      VITE_CHATBOT_API_URL: http://localhost:5000
+```
+
+For local Vite development, add the variable to `frontend/.env.local`:
+
+```bash
+VITE_CHATBOT_API_URL=http://localhost:5000
+```
+
+## Docker Setup
+
+The `chatbot/Dockerfile` produces a minimal production image:
+
+```dockerfile
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+COPY server.js ./
+
+ENV NODE_ENV=production
+EXPOSE 5000
+
+CMD ["node", "server.js"]
+```
+
+In Docker Compose the chatbot service is wired to the same network as the backend and frontend:
+
+```yaml
+chatbot:
+  build:
+    context: ./chatbot
+    dockerfile: Dockerfile
+  container_name: examport-chatbot
+  environment:
+    GENAI_API_KEY: ${GENAI_API_KEY}
+    PORT: 5000
+  ports:
+    - "5000:5000"
+  networks:
+    - examport-network
+```
+
+## Running Locally
+
+To run the chatbot outside Docker during development:
+
+```bash
+cd chatbot
+npm ci
+node server.js
+```
+
+The service will start and print:
+
+```
+ExamWizards chatbot listening on port 5000
+```
+
+<Tip>
+  Install `nodemon` globally (`npm install -g nodemon`) and run `npm run dev` for automatic restart on file changes during development.
+</Tip>
+
+## System Instruction Scope
+
+The Gemini model receives a detailed system instruction on every request that constrains it to Examwizards topics. It covers all three roles (Student, Instructor, Administrator), describes every major platform feature, and instructs the model to redirect off-topic questions back to platform-related queries. If the model cannot answer, it directs users to the platform helpline.

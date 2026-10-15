@@ -1,0 +1,304 @@
+---
+title: "Authenticating with the Examwizards API Using JWT"
+sidebarTitle: "Authentication"
+description: "Learn how to register, verify your email, and obtain a JWT from the Examwizards login endpoint to authenticate every subsequent API request."
+---
+
+The Examwizards API uses stateless JWT authentication. Every protected endpoint expects an `Authorization: Bearer <token>` header; no session cookies or API keys are involved. Tokens are signed with HS256 using the `JWT_SECRET` environment variable and expire after **5 hours**, after which the client must log in again to obtain a fresh token. This page walks through the full flow from registration to making an authenticated request, and covers the password-reset flow as well.
+
+## How It Works
+
+<Steps>
+  <Step title="Register a new account">
+    Call `POST /api/auth/register` with your credentials and desired role (`student` or `instructor`). On success, a verification email is dispatched to the address you provided.
+
+    ```bash
+    curl -X POST http://localhost:8080/api/auth/register \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "username": "jdoe",
+        "email": "jdoe@example.com",
+        "password": "Secret123!",
+        "role": "STUDENT"
+      }'
+    ```
+
+    A successful response confirms the account was created and that a verification email has been sent:
+
+    ```json
+    {
+      "username": "jdoe",
+      "role": "student",
+      "emailVerified": false,
+      "verificationEmailSent": true,
+      "message": "Registration successful! Please check your email to verify your account before logging in."
+    }
+    ```
+
+    <Warning>
+      Admin accounts **cannot** be created through this endpoint. Passing `"role": "admin"` returns a `400` error. Admin accounts are bootstrapped at startup using the `EW_BOOTSTRAP_ADMIN_EMAIL`, `EW_BOOTSTRAP_ADMIN_PASSWORD`, and `EW_BOOTSTRAP_ADMIN_USERNAME` environment variables set in `.env`.
+    </Warning>
+  </Step>
+
+  <Step title="Verify your email address">
+    Login is blocked until the account's email is verified. Click the link in the verification email, or call the verification endpoint directly with the token from the link:
+
+    ```bash
+    curl "http://localhost:8080/api/auth/verify-email?token=<verification-token>"
+    ```
+
+    A successful verification returns:
+
+    ```json
+    {
+      "success": true,
+      "message": "Email verified successfully! You can now log in to your account."
+    }
+    ```
+
+    If you did not receive the email, use the resend endpoint:
+
+    ```bash
+    curl -X POST http://localhost:8080/api/auth/resend-verification \
+      -H 'Content-Type: application/json' \
+      -d '{"email": "jdoe@example.com"}'
+    ```
+  </Step>
+
+  <Step title="Log in and receive your JWT">
+    Call `POST /api/auth/login` with your email **or** username and your password. The `username` field in the request body accepts either identifier.
+
+    ```bash
+    curl -X POST http://localhost:8080/api/auth/login \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "username": "jdoe@example.com",
+        "password": "Secret123!"
+      }'
+    ```
+
+    On success, the response includes your JWT along with profile metadata:
+
+    ```json
+    {
+      "token": "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlcyI6WyJST0xFX1NUVURFTlQiXSwic3ViIjoiamRvZSIsImlhdCI6MTcxODAwMDAwMCwiZXhwIjoxNzE4MDE4MDAwfQ.signature",
+      "username": "jdoe",
+      "role": "student",
+      "fullName": "Jane Doe",
+      "avatarUrl": null,
+      "gender": null,
+      "emailVerified": true,
+      "timestamp": 1718000000000
+    }
+    ```
+
+    Store the `token` value securely (e.g. in memory or `sessionStorage`). Do **not** persist it in `localStorage` in security-sensitive deployments.
+  </Step>
+
+  <Step title="Attach the token to every protected request">
+    Pass the JWT in the `Authorization` header on all subsequent calls to protected endpoints:
+
+    ```bash
+    curl http://localhost:8080/api/student/dashboard \
+      -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlcyI6WyJST0xFX1NUVURFTlQiXSwic3ViIjoiamRvZSIsImlhdCI6MTcxODAwMDAwMCwiZXhwIjoxNzE4MDE4MDAwfQ.signature'
+    ```
+
+    If the token is missing, expired, or signed with a different secret, the API returns `401 Unauthorized`.
+  </Step>
+</Steps>
+
+## Token Expiry and the JWT Secret
+
+Tokens are valid for **5 hours** from the moment they are issued (`iat`). After expiry the server rejects the token with a `401` response and the client must call `POST /api/auth/login` again to get a new one.
+
+The signing key is read from the `JWT_SECRET` environment variable at startup. The key must be **at least 32 UTF-8 characters** for HS256. If `JWT_SECRET` is not set, the application generates an ephemeral key — tokens issued before a restart become invalid after one.
+
+```bash
+# In .env or your shell
+JWT_SECRET=a-very-long-random-string-of-at-least-32-chars
+```
+
+<Note>
+  In production, store `JWT_SECRET` in **AWS Secrets Manager** and inject it into the ECS task definition as an environment variable. Never commit the value to version control.
+</Note>
+
+## Password Reset Flow
+
+If a user forgets their password, the two-step reset flow lets them set a new one via a time-limited email link.
+
+<Steps>
+  <Step title="Request a reset link">
+    Send the account's email address to the request endpoint. The API dispatches a reset link regardless of whether the email matches an account, to prevent user enumeration.
+
+    ```bash
+    curl -X POST http://localhost:8080/api/auth/request-password-reset \
+      -H 'Content-Type: application/json' \
+      -d '{"email": "jdoe@example.com"}'
+    ```
+
+    ```json
+    {
+      "success": true,
+      "message": "Password reset link has been sent to your email address."
+    }
+    ```
+  </Step>
+
+  <Step title="Submit the new password">
+    Extract the `token` from the reset link in the email and post it alongside the new password. The password must be at least **6 characters**.
+
+    ```bash
+    curl -X POST http://localhost:8080/api/auth/reset-password \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "token": "<reset-token-from-email>",
+        "newPassword": "NewSecret456!"
+      }'
+    ```
+
+    ```json
+    {
+      "success": true,
+      "message": "Password reset successfully! You can now log in with your new password."
+    }
+    ```
+
+    If the token is expired or invalid the API returns `400 Bad Request` with `"success": false`.
+  </Step>
+</Steps>
+
+## Role-Based Access
+
+The JWT encodes the user's role as a Spring Security authority (e.g. `ROLE_STUDENT`). The API enforces access at the endpoint level — calling an endpoint with an insufficient role returns `403 Forbidden`.
+
+<Tabs>
+  <Tab title="STUDENT">
+    Students can:
+    - Browse the public course catalog (`GET /api/courses/public`).
+    - Enroll in free or paid courses (`/api/enrollments/**`).
+    - Take timed exams and submit answers (`/api/exams/**`).
+    - View their own results and score breakdowns (`/api/results/**`).
+    - Access their personal dashboard (`/api/student/**`).
+    - Update their own profile (`/api/users/me`).
+    - Submit and manage their own course reviews.
+
+    Students **cannot** create or edit courses or exams, access the instructor dashboard, or call any `/api/admin/**` endpoint.
+  </Tab>
+  <Tab title="INSTRUCTOR">
+    Instructors can do everything a student can, plus:
+    - Create and update courses (`POST /api/courses/create`, `PUT /api/courses/**`).
+    - Manage course exams and questions.
+    - Access the instructor analytics dashboard (`/api/instructor/**`).
+
+    Instructors **cannot** access `/api/admin/**` endpoints.
+  </Tab>
+  <Tab title="ADMIN">
+    Admins have unrestricted access to all endpoints, including:
+    - Full user management via `/api/admin/**` and `/api/users/**`.
+    - Content moderation: approve or reject course reviews.
+    - Access to the contact message inbox.
+    - The admin analytics dashboard.
+    - Promoting, suspending, or deleting any user account.
+  </Tab>
+</Tabs>
+
+## Auth Endpoint Reference
+
+<Accordion title="POST /api/auth/register">
+  Creates a new `student` or `instructor` account. Sending `"role": "admin"` returns `400`.
+
+  **Request body**
+
+  <ParamField body="username" type="string" required>
+    Unique display name for the account.
+  </ParamField>
+  <ParamField body="email" type="string" required>
+    Unique email address. Used to send the verification link.
+  </ParamField>
+  <ParamField body="password" type="string" required>
+    Plain-text password. BCrypt-hashed before storage.
+  </ParamField>
+  <ParamField body="role" type="string" required>
+    Either `"student"` or `"instructor"` (case-insensitive).
+  </ParamField>
+  <ParamField body="phoneNumber" type="string">
+    Optional unique phone number.
+  </ParamField>
+  <ParamField body="fullName" type="string">
+    Optional display name shown in the UI.
+  </ParamField>
+</Accordion>
+
+<Accordion title="POST /api/auth/login">
+  Authenticates an existing, email-verified account and returns a signed JWT.
+
+  **Request body**
+
+  <ParamField body="username" type="string" required>
+    The user's **username or email address** — either is accepted.
+  </ParamField>
+  <ParamField body="password" type="string" required>
+    The account password.
+  </ParamField>
+
+  **Response fields**
+
+  <ResponseField name="token" type="string">
+    Signed HS256 JWT. Valid for 5 hours.
+  </ResponseField>
+  <ResponseField name="username" type="string">
+    The account's username.
+  </ResponseField>
+  <ResponseField name="role" type="string">
+    The account's role: `student`, `instructor`, or `admin`.
+  </ResponseField>
+  <ResponseField name="emailVerified" type="boolean">
+    Always `true` on a successful login — unverified accounts are rejected with `403`.
+  </ResponseField>
+  <ResponseField name="timestamp" type="number">
+    Unix timestamp (milliseconds) of token issuance.
+  </ResponseField>
+</Accordion>
+
+<Accordion title="GET /api/auth/verify-email">
+  Confirms an email address using the token from the verification link.
+
+  **Query parameter**
+
+  <ParamField query="token" type="string" required>
+    The verification token included in the email link.
+  </ParamField>
+</Accordion>
+
+<Accordion title="POST /api/auth/request-password-reset">
+  Dispatches a password-reset email.
+
+  **Request body**
+
+  <ParamField body="email" type="string" required>
+    The email address associated with the account.
+  </ParamField>
+</Accordion>
+
+<Accordion title="POST /api/auth/reset-password">
+  Sets a new password using a valid reset token.
+
+  **Request body**
+
+  <ParamField body="token" type="string" required>
+    The reset token from the email link.
+  </ParamField>
+  <ParamField body="newPassword" type="string" required>
+    The new password. Must be at least 6 characters.
+  </ParamField>
+</Accordion>
+
+<Accordion title="POST /api/auth/resend-verification">
+  Re-sends the verification email to an unverified account.
+
+  **Request body**
+
+  <ParamField body="email" type="string" required>
+    The email address of the unverified account.
+  </ParamField>
+</Accordion>

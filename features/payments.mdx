@@ -1,0 +1,168 @@
+---
+title: "Payments: Razorpay Integration for Paid Course Enrollment"
+sidebarTitle: "Payments"
+description: "Examwizards creates Razorpay orders server-side, opens the checkout modal on the frontend, then verifies the HMAC-SHA256 signature before granting course access."
+---
+
+Paid courses in Examwizards use [Razorpay](https://razorpay.com) as the payment gateway. The integration follows Razorpay's recommended server-to-server order verification flow: the backend creates a signed order, the frontend opens the Razorpay checkout modal, and after the student completes payment the backend verifies the response signature before creating the enrollment record. No payment data is stored in the Examwizards database beyond the Razorpay `orderId` and `paymentId` that are written to the enrollment's `paymentTransactionId` field.
+
+## Payment Flow Overview
+
+<Steps>
+  <Step title="Fetch the Razorpay public key">
+    The frontend calls `GET /api/payment/config` to retrieve the public key ID (`rzp_live_...` or `rzp_test_...`). This key is safe to expose to the browser.
+  </Step>
+  <Step title="Create a payment order">
+    The frontend calls `POST /api/courses/{courseId}/purchase`. The backend creates a Razorpay order with the course price converted to paise (1 INR = 100 paise) and returns the `orderId`, `amount`, and `currency`.
+  </Step>
+  <Step title="Open the checkout modal">
+    The frontend passes the `orderId`, `amount`, `currency`, and public key to the Razorpay JavaScript SDK, which renders the hosted payment form.
+  </Step>
+  <Step title="Verify the payment server-side">
+    After the student completes payment, the Razorpay SDK returns `razorpay_order_id`, `razorpay_payment_id`, and `razorpay_signature`. The frontend submits these to `POST /api/courses/payment/verify`. The backend recomputes the expected HMAC-SHA256 signature and compares it before enrolling the student.
+  </Step>
+</Steps>
+
+## Step 1 — Fetch the Public Key
+
+```bash
+curl http://localhost:8080/api/payment/config \
+  -H "Authorization: Bearer <student_token>"
+```
+
+```json
+{
+  "razorpayKeyId": "rzp_test_XXXXXXXXXXXX"
+}
+```
+
+## Step 2 — Create a Payment Order
+
+```bash
+curl -X POST http://localhost:8080/api/courses/14/purchase \
+  -H "Authorization: Bearer <student_token>"
+```
+
+**Successful response (HTTP 200):**
+
+```json
+{
+  "orderId": "order_PQR123456789",
+  "amount": 49900,
+  "currency": "INR",
+  "courseId": 14,
+  "courseName": "Advanced Data Structures"
+}
+```
+
+<Note>
+  `amount` is denominated in **paise**. A course priced at ₹499.00 returns `amount: 49900`. Pass this value directly to the Razorpay SDK — do not convert it again on the frontend.
+</Note>
+
+## Step 3 — Open the Checkout Modal
+
+Use the Razorpay JavaScript SDK to present the payment form. Load the SDK script from `https://checkout.razorpay.com/v1/checkout.js` in your HTML.
+
+```javascript
+const options = {
+  key: razorpayKeyId,          // from GET /api/payment/config
+  amount: order.amount,        // in paise, from POST .../purchase
+  currency: order.currency,    // "INR"
+  order_id: order.orderId,     // from POST .../purchase
+  name: "ExamWizards",
+  description: order.courseName,
+  handler: function (response) {
+    // response contains razorpay_order_id, razorpay_payment_id, razorpay_signature
+    verifyPayment(response, order.courseId);
+  },
+};
+const rzp = new window.Razorpay(options);
+rzp.open();
+```
+
+## Step 4 — Verify the Payment
+
+After the modal handler fires, send the three Razorpay response fields plus the `courseId` to the backend for verification:
+
+```bash
+curl -X POST http://localhost:8080/api/courses/payment/verify \
+  -H "Authorization: Bearer <student_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "razorpay_order_id": "order_PQR123456789",
+    "razorpay_payment_id": "pay_ABC987654321",
+    "razorpay_signature": "3d3e4f5a6b...",
+    "courseId": 14
+  }'
+```
+
+**Successful response (HTTP 200):**
+
+```json
+{
+  "success": true,
+  "message": "Payment verified and enrollment completed successfully",
+  "orderId": "order_PQR123456789",
+  "paymentId": "pay_ABC987654321",
+  "courseId": 14,
+  "courseName": "Advanced Data Structures"
+}
+```
+
+**Failed signature (HTTP 422):**
+
+```json
+{
+  "error": "Payment signature verification failed",
+  "retryable": true
+}
+```
+
+## How Signature Verification Works
+
+The backend uses Razorpay's `Utils.verifyPaymentSignature` utility, which computes the HMAC-SHA256 of the string `orderId|paymentId` using `RAZORPAY_KEY_SECRET` as the key and compares it to the `razorpay_signature` provided by the SDK. This ensures that the payment data has not been tampered with between the Razorpay servers and the client.
+
+```java
+// Internally called in PaymentService.verifyPaymentSignature()
+boolean isValid = Utils.verifyPaymentSignature(
+    new JSONObject()
+        .put("razorpay_order_id", orderId)
+        .put("razorpay_payment_id", paymentId)
+        .put("razorpay_signature", signature),
+    razorpayKeySecret
+);
+```
+
+<Warning>
+  `RAZORPAY_KEY_SECRET` must **never** be exposed to the browser. It is read exclusively from the server-side environment and is never returned by any API endpoint. The only value that goes to the frontend is `razorpayKeyId` from `GET /api/payment/config`.
+</Warning>
+
+## Environment Variables
+
+Both variables must be set before the backend starts. In Docker Compose they are injected via the `.env` file at the project root.
+
+```bash
+# .env
+RAZORPAY_KEY_ID=rzp_test_XXXXXXXXXXXX
+RAZORPAY_KEY_SECRET=your_key_secret_here
+```
+
+They map to Spring Boot properties:
+
+```yaml
+# application.properties (resolved from env)
+razorpay.key.id=${RAZORPAY_KEY_ID}
+razorpay.key.secret=${RAZORPAY_KEY_SECRET}
+```
+
+<Tip>
+  Use Razorpay's **test mode** keys (`rzp_test_...`) during development. Test card numbers and UPI IDs are available in the [Razorpay test documentation](https://razorpay.com/docs/payments/payments/test-card-details/). Switch to live keys only after end-to-end testing is complete.
+</Tip>
+
+## Endpoint Reference
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/payment/config` | Any | Returns Razorpay public key ID |
+| `POST` | `/api/courses/{courseId}/purchase` | Student | Creates a Razorpay order |
+| `POST` | `/api/courses/payment/verify` | Student | Verifies signature and enrolls student |

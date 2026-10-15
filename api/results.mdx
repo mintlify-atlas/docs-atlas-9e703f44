@@ -1,0 +1,169 @@
+---
+title: "Results API: Retrieve Exam Scores and Performance Data"
+sidebarTitle: "Results"
+description: "Reference for all /api/results endpoints: fetching a student's own submission history, retrieving per-exam aggregates for instructors, and looking up individual result records."
+---
+
+The Results API surfaces everything that happens after a student clicks submit. Every result record stores the raw score, a pass/fail flag, time taken, per-question answer snapshot, auto-generated feedback, and a computed letter grade. Students can only access their own results; instructors can view the full submission list for any exam in their courses. Responses are pre-enriched with exam and user context so the frontend never needs a second request.
+
+---
+
+## GET /api/results/me
+
+Returns all result records for the authenticated user, ordered by attempt date descending (most recent first). Each record is enriched with full exam metadata including the parent course, a computed percentage, and a letter grade.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK` — array of enhanced result objects.
+
+<ResponseField name="id" type="number">
+  Unique result record identifier.
+</ResponseField>
+<ResponseField name="score" type="number">
+  Raw score earned on the exam.
+</ResponseField>
+<ResponseField name="passed" type="boolean">
+  `true` if the score met the 60% passing threshold.
+</ResponseField>
+<ResponseField name="percentage" type="number">
+  Score as a percentage of total marks, rounded to two decimal places.
+</ResponseField>
+<ResponseField name="grade" type="string">
+  Letter grade: `"A+"` (≥90%), `"A"` (≥80%), `"B+"` (≥70%), `"B"` (≥60%), `"C"` (≥50%), or `"F"`.
+</ResponseField>
+<ResponseField name="timeTaken" type="number">
+  Seconds spent on the exam.
+</ResponseField>
+<ResponseField name="timeTakenFormatted" type="string">
+  Human-readable duration, e.g. `"20:45"` (mm:ss).
+</ResponseField>
+<ResponseField name="attemptDate" type="string">
+  ISO-8601 timestamp of when the exam was submitted.
+</ResponseField>
+<ResponseField name="feedback" type="string">
+  Auto-generated feedback string based on performance band.
+</ResponseField>
+<ResponseField name="answers" type="string">
+  JSON string of the submitted answers keyed by question ID.
+</ResponseField>
+<ResponseField name="userRank" type="number">
+  Relative rank among all submissions for this exam, if computed.
+</ResponseField>
+<ResponseField name="exam" type="object">
+  Nested object with `id`, `title`, `description`, `totalMarks`, `duration`, and a `course` sub-object (`id`, `name`).
+</ResponseField>
+<ResponseField name="user" type="object">
+  Nested object with `id`, `username`, `fullName`, and `email`.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/results/me \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/results/my-results
+
+Alias for `GET /api/results/me`. Returns the same payload and is provided for client compatibility. Both routes are interchangeable.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK` — identical to `/me`.
+
+```bash
+curl http://localhost:8080/api/results/my-results \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/results/exam/{examId}
+
+Returns all submission records for a specific exam, ordered by score descending (highest first). Intended for instructor use to view a leaderboard or review student performance.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK` — array of enhanced result objects (same shape as `/me`), sorted highest score first.
+
+<ResponseField name="id" type="number">
+  Result record ID.
+</ResponseField>
+<ResponseField name="score" type="number">
+  Raw score for this submission.
+</ResponseField>
+<ResponseField name="passed" type="boolean">
+  Whether the student passed.
+</ResponseField>
+<ResponseField name="percentage" type="number">
+  Computed score percentage.
+</ResponseField>
+<ResponseField name="grade" type="string">
+  Computed letter grade.
+</ResponseField>
+<ResponseField name="attemptDate" type="string">
+  Submission timestamp.
+</ResponseField>
+<ResponseField name="user" type="object">
+  Student details: `id`, `username`, `fullName`, `email`.
+</ResponseField>
+<ResponseField name="exam" type="object">
+  Exam details: `id`, `title`, `totalMarks`, `duration`, `course`.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/results/exam/7 \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/results/{id}
+
+Returns a single result record by its numeric ID. Access is restricted: only the student who submitted the result or a user with the `INSTRUCTOR` role may retrieve it. Any other authenticated user receives `403 Forbidden`.
+
+**Auth**: Bearer JWT — result owner or INSTRUCTOR role required.
+
+**Response** `200 OK` — single enhanced result object.
+
+<ResponseField name="id" type="number">
+  Result record ID.
+</ResponseField>
+<ResponseField name="score" type="number">
+  Raw score.
+</ResponseField>
+<ResponseField name="passed" type="boolean">
+  Pass/fail flag.
+</ResponseField>
+<ResponseField name="percentage" type="number">
+  Score percentage.
+</ResponseField>
+<ResponseField name="grade" type="string">
+  Letter grade (`"A+"` through `"F"`).
+</ResponseField>
+<ResponseField name="timeTaken" type="number">
+  Seconds taken.
+</ResponseField>
+<ResponseField name="timeTakenFormatted" type="string">
+  `"mm:ss"` formatted duration.
+</ResponseField>
+<ResponseField name="feedback" type="string">
+  Auto-generated feedback.
+</ResponseField>
+<ResponseField name="answers" type="string">
+  JSON string of submitted answers.
+</ResponseField>
+<ResponseField name="attemptDate" type="string">
+  Submission timestamp.
+</ResponseField>
+<ResponseField name="exam" type="object">
+  Exam details with nested `course` object.
+</ResponseField>
+<ResponseField name="user" type="object">
+  Submitting student's details.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/results/55 \
+  -H 'Authorization: Bearer <token>'
+```

@@ -1,0 +1,190 @@
+---
+title: "Student Role: Enroll, Take Exams, and Track Progress"
+sidebarTitle: "Student"
+description: "Covers the full student journey on Examwizards — browsing the course catalog, enrolling in free or paid courses, taking timed exams, viewing auto-graded results, and checking the leaderboard."
+---
+
+Students are the primary learners on the Examwizards platform. Once registered and email-verified, a student can browse the public course catalog, enroll in free or paid courses, attempt timed exams tied to those courses, receive instant auto-graded results with letter grades, and track cumulative performance across their personal dashboard. Only courses a student is enrolled in expose their associated exams — access is enforced server-side before every exam attempt.
+
+## Student Dashboard
+
+The dashboard aggregates everything a student needs in one API call. It is protected by JWT; an unauthenticated request returns `401 Unauthorized`.
+
+```http
+GET /api/student/dashboard
+Authorization: Bearer <token>
+```
+
+The response contains four top-level keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `upcomingExams` | array | Exams available to attempt (not yet submitted) |
+| `recentResults` | array | Up to 5 most-recent graded results |
+| `stats` | object | Aggregate counters and average score |
+| `performanceData` | array | Subject-level score breakdown |
+
+### Response shape
+
+```json
+{
+  "upcomingExams": [
+    {
+      "id": 12,
+      "exam_id": 12,
+      "title": "Data Structures Mid-Term",
+      "date": "2025-08-15",
+      "time": "10:00:00",
+      "duration": 60,
+      "instructor": "Dr. Priya Sharma",
+      "totalMarks": 100,
+      "courseName": "CS Fundamentals",
+      "canAttempt": true,
+      "statusMessage": "Ready to attempt"
+    }
+  ],
+  "recentResults": [
+    {
+      "id": 47,
+      "title": "Algorithms Quiz 1",
+      "score": 82.0,
+      "totalMarks": 100,
+      "date": "2025-07-28T14:30:00",
+      "grade": "A"
+    }
+  ],
+  "stats": {
+    "totalExams": 8,
+    "completedExams": 5,
+    "averageScore": 76.4,
+    "rank": 12,
+    "totalCourses": 3,
+    "completedCourses": 0
+  },
+  "performanceData": [
+    { "subject": "Math", "score": 88 },
+    { "subject": "Physics", "score": 74 },
+    { "subject": "Chemistry", "score": 91 }
+  ]
+}
+```
+
+<Note>
+  `canAttempt` reflects the exam's `isactive` flag on the server. An exam that is inactive is listed in `upcomingExams` with `canAttempt: false` and `statusMessage: "Not yet available"` so students know it exists but cannot start it yet.
+</Note>
+
+## Browsing and Enrolling in Courses
+
+Examwizards supports two visibility modes and two pricing modes on courses, which combine to create four enrollment flows.
+
+<Tabs>
+  <Tab title="Public Free">
+    Any authenticated student can enroll immediately. No payment step is required. The `POST /api/enrollments/enroll` call creates the enrollment record and grants exam access.
+  </Tab>
+  <Tab title="Public Paid">
+    The student sees the course price (set by the instructor) and initiates a Razorpay payment order via `POST /api/payments/create-order`. After successful payment verification through `POST /api/payments/verify`, the enrollment is created automatically.
+  </Tab>
+  <Tab title="Private Free">
+    The instructor uploads a CSV of allowed email addresses when creating the course. Only students whose registered email appears in that list can enroll without payment.
+  </Tab>
+  <Tab title="Private Paid">
+    Same email-allowlist check as Private Free, combined with the Razorpay payment flow before enrollment is confirmed.
+  </Tab>
+</Tabs>
+
+Students can view all their active enrollments at any time:
+
+```http
+GET /api/enrollments/my-enrollments?page=0&size=10&sortBy=enrollmentDate&sortDir=desc
+Authorization: Bearer <token>
+```
+
+## Taking an Exam
+
+<Steps>
+  <Step title="Access check">
+    The backend calls `EnrollmentService.isUserEnrolledInCourse(username, courseId)` before returning the exam interface. Students who are not enrolled receive a `403 Forbidden` response regardless of whether they know the exam ID.
+  </Step>
+  <Step title="Exam interface">
+    The React SPA loads all questions for the exam. The client-side timer counts down from the exam's `duration` (in minutes). Students can navigate between questions and update answers at any time before submitting.
+  </Step>
+  <Step title="Submit answers">
+    On submit (or when the timer expires), the SPA posts the answer payload to the exam API. Auto-grading runs immediately on the server.
+  </Step>
+  <Step title="Receive result">
+    The graded `Result` record is persisted with `score`, `passed`, `timeTaken`, `attemptDate`, and a `grade` letter computed from the percentage. A confirmation email is dispatched via the Gmail SMTP integration.
+  </Step>
+</Steps>
+
+<Info>
+  Once a student submits an exam, that exam no longer appears in `upcomingExams`. The result appears immediately in `recentResults` on the next dashboard fetch.
+</Info>
+
+## Viewing Results
+
+Two endpoints let students inspect their performance history:
+
+### All results for the authenticated student
+
+```http
+GET /api/results/me
+Authorization: Bearer <token>
+```
+
+Returns an array sorted by `attemptDate` descending. Each element includes the enriched `exam` object (title, `totalMarks`, course name), the calculated `percentage`, and the `grade` letter.
+
+### Single result by ID
+
+```http
+GET /api/results/{id}
+Authorization: Bearer <token>
+```
+
+Returns the full result detail — including `answers` (the student's submitted responses), `timeTakenFormatted` (e.g. `"42:05"`), `userRank`, and `feedback`. The backend enforces ownership: a student can only fetch their own results; instructors may read any result for their course's exams.
+
+### Grade scale
+
+| Percentage | Grade |
+|---|---|
+| ≥ 90 % | A+ |
+| ≥ 80 % | A |
+| ≥ 70 % | B+ |
+| ≥ 60 % | B |
+| ≥ 50 % | C |
+| < 50 % | F |
+
+## Leaderboard and Reviews
+
+Student ranks are captured in the `userRank` field of each `Result` record. The student dashboard `stats.rank` field reflects the student's current standing.
+
+Students and instructors can submit platform reviews once authenticated. After submission the review enters a pending queue and is only visible publicly after an admin approves it.
+
+```http
+POST /api/reviews/submit
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "content": "Excellent platform — the timed exam interface is very smooth.",
+  "rating": 5
+}
+```
+
+A student can also update (`PUT /api/reviews/update`), read (`GET /api/reviews/my-review`), or delete (`DELETE /api/reviews/delete`) their own review at any time.
+
+## Related Pages
+
+<CardGroup cols={2}>
+  <Card title="Enrollments" icon="graduation-cap" href="/features/enrollments">
+    Full enrollment flow including free, paid, public, and private course access.
+  </Card>
+  <Card title="Exams" icon="file-pen" href="/features/exams">
+    Exam creation, question banks, timing, and the submission lifecycle.
+  </Card>
+  <Card title="Payments" icon="credit-card" href="/features/payments">
+    Razorpay integration, order creation, and payment verification.
+  </Card>
+  <Card title="Results API" icon="chart-bar" href="/api/results">
+    Full API reference for result retrieval, grading, and rank fields.
+  </Card>
+</CardGroup>

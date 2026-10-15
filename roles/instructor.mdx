@@ -1,0 +1,155 @@
+---
+title: "Instructor Role: Publish Courses and Manage Exams"
+sidebarTitle: "Instructor"
+description: "Covers the instructor experience on Examwizards — creating and publishing courses, building question banks, setting up timed exams, and monitoring enrollment revenue through the dashboard."
+---
+
+Instructors are content creators on the Examwizards platform. After self-registering (only `student` and `instructor` roles are available through the public registration form — admin accounts cannot be created this way), instructors can build courses with configurable visibility and pricing, attach timed exams to those courses, populate question banks, and track how many students have enrolled and how much revenue their paid courses have generated. Ownership is strictly enforced: instructors can only manage courses and exams they created.
+
+## Instructor Dashboard
+
+The dashboard consolidates course, enrollment, and financial data into a single authenticated call.
+
+```http
+GET /api/instructor/dashboard
+Authorization: Bearer <token>
+```
+
+### Response shape
+
+```json
+{
+  "stats": {
+    "totalCourses": 4,
+    "totalEnrollments": 137,
+    "totalRevenue": 24650,
+    "totalExams": 0,
+    "totalStudents": 137,
+    "averageScore": 0.0,
+    "completionRate": 0.0
+  },
+  "myExams": []
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `totalCourses` | number | Number of courses created by this instructor |
+| `totalEnrollments` | number | Total student enrollments across all owned courses |
+| `totalRevenue` | number | Sum of payments received from paid-course enrollments (INR paise or currency unit from Razorpay) |
+| `totalExams` | number | Total exams attached to the instructor's courses |
+| `totalStudents` | number | Unique student count (currently mirrors `totalEnrollments`) |
+| `averageScore` | number | Mean exam score across all students in owned courses |
+| `completionRate` | number | Percentage of enrolled students who have completed at least one exam |
+| `myExams` | array | List of exams belonging to the instructor's courses |
+
+<Note>
+  `averageScore` and `completionRate` are populated once students have submitted results. On a new account both default to `0.0`. `totalRevenue` is sourced directly from verified Razorpay payment records and excludes pending or failed transactions.
+</Note>
+
+## Course Lifecycle
+
+<Steps>
+  <Step title="Create a course">
+    Submit a multipart form to `POST /api/courses/create`. Required fields are `name`, `visibility` (`PUBLIC` or `PRIVATE`), and `pricing` (`FREE` or `PAID`). Paid courses also require a `price` value. Private courses require a `file` upload — a plain-text CSV of allowed student email addresses (one per line).
+
+    ```bash
+    # Public free course
+    curl -X POST https://api.examwizards.com/api/courses/create \
+      -H "Authorization: Bearer <token>" \
+      -F "name=Introduction to Algorithms" \
+      -F "description=Covers sorting, searching, and graph algorithms." \
+      -F "visibility=PUBLIC" \
+      -F "pricing=FREE"
+    ```
+
+    ```bash
+    # Private paid course with email allowlist
+    curl -X POST https://api.examwizards.com/api/courses/create \
+      -H "Authorization: Bearer <token>" \
+      -F "name=Advanced Machine Learning" \
+      -F "visibility=PRIVATE" \
+      -F "pricing=PAID" \
+      -F "price=1499" \
+      -F "file=@allowed_students.csv"
+    ```
+  </Step>
+  <Step title="Publish and manage enrollments">
+    Once created, a course is visible to eligible students immediately (public courses appear in the catalog; private courses are reachable only by email-allowlisted users). Instructors can update course metadata or delete a course via the course management endpoints under `GET /api/courses/{id}`, `PUT /api/courses/{id}`, and `DELETE /api/courses/{id}`.
+  </Step>
+  <Step title="Monitor enrollments">
+    The `totalEnrollments` field in the dashboard is derived from `EnrollmentService.getInstructorStats(username)`, which aggregates across all courses owned by the instructor. Individual enrollment records are available through the admin-facing enrollment endpoints.
+  </Step>
+  <Step title="Update or remove a course">
+    Instructors can update course details or delete a course at any time. Deleting a course cascades to its associated exams. Students who are already enrolled retain their result records even after course deletion.
+  </Step>
+</Steps>
+
+## Exam Lifecycle
+
+<Steps>
+  <Step title="Create an exam">
+    An exam must be linked to one of the instructor's own courses. The exam record stores `title`, `description`, `duration` (minutes), `totalMarks`, `startDate`, `startTime`, and the `isactive` flag that controls whether students can attempt it.
+  </Step>
+  <Step title="Build the question bank">
+    Questions are added individually via `POST /api/questions` and are associated with the exam. Each question carries its own mark value, options, and the correct answer index. The question bank can be modified at any time before the exam goes live.
+  </Step>
+  <Step title="Activate the exam">
+    Setting `isactive = true` makes the exam available to all enrolled students. The `canAttempt` flag on the student dashboard reflects this state in real time.
+  </Step>
+  <Step title="Review results">
+    After students submit, results are accessible via `GET /api/results/exam/{examId}`. Results are ordered by `score` descending, giving instructors an instant leaderboard view. Each result includes the student's answers, time taken, and computed grade.
+
+    ```http
+    GET /api/results/exam/{examId}
+    Authorization: Bearer <token>
+    ```
+  </Step>
+</Steps>
+
+## Revenue Tracking
+
+When a student enrolls in a paid course, the platform creates a Razorpay payment order via `POST /api/payments/create-order` and confirms it through `POST /api/payments/verify`. Only verified payments trigger enrollment creation. The instructor dashboard's `totalRevenue` field sums all verified payment amounts across the instructor's paid courses, providing a single-number revenue view without requiring manual reconciliation.
+
+<Tip>
+  To test the payment flow in development, use Razorpay's test-mode credentials. Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in `.env` to your test keys. No real charges are made in test mode.
+</Tip>
+
+## Instructor Restrictions
+
+<Accordion title="Why can't instructors register as admins?">
+  The `POST /api/auth/register` endpoint explicitly rejects any payload where `role` is `"admin"`:
+
+  ```java
+  if ("admin".equals(role)) {
+      return ResponseEntity.badRequest().body(Map.of(
+          "error",
+          "Admin accounts cannot be created through public registration. " +
+          "Please contact system administrator."
+      ));
+  }
+  ```
+
+  Admin accounts are provisioned only at first startup via the `DefaultAdminBootstrap` component, seeded from the `EW_BOOTSTRAP_ADMIN_EMAIL`, `EW_BOOTSTRAP_ADMIN_PASSWORD`, and `EW_BOOTSTRAP_ADMIN_USERNAME` environment variables.
+</Accordion>
+
+<Accordion title="Can an instructor manage another instructor's courses?">
+  No. `POST /api/courses/create` resolves the authenticated principal's username to a `User` entity and sets that user as the course `instructor`. All subsequent update and delete operations on the course enforce that the calling principal matches the stored instructor. Attempts to modify another instructor's course return `403 Forbidden`.
+</Accordion>
+
+## Related Pages
+
+<CardGroup cols={2}>
+  <Card title="Courses" icon="book-open" href="/features/courses">
+    Detailed guide to course creation, visibility modes, pricing, and the email-allowlist CSV format for private courses.
+  </Card>
+  <Card title="Exams" icon="file-pen" href="/features/exams">
+    Full exam configuration reference including question banks, timing, activation, and result retrieval.
+  </Card>
+  <Card title="Courses API" icon="code" href="/api/courses">
+    REST reference for all course endpoints: create, list, update, delete, and enrollment queries.
+  </Card>
+  <Card title="Exams API" icon="code" href="/api/exams">
+    REST reference for exam endpoints, question management, and per-exam result retrieval.
+  </Card>
+</CardGroup>

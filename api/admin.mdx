@@ -1,0 +1,209 @@
+---
+title: "Admin API: Dashboard, User Management, and Analytics"
+sidebarTitle: "Admin"
+description: "Reference for all /api/admin endpoints: platform-wide dashboard statistics, full user listing, role-based counts, cascading-delete impact preview, and permanent user removal."
+---
+
+The Admin API is restricted to accounts with the `ADMIN` role and exposes the operational controls needed to monitor the Examwizards platform and manage users. The dashboard endpoint aggregates live counts from the database (users, exams, result attempts, and average score) with a per-role breakdown. User management endpoints provide full visibility into every account and a safe, two-step deletion flow: first preview the cascading impact, then execute the permanent removal.
+
+---
+
+## GET /api/admin/dashboard
+
+Returns real-time platform statistics sourced directly from the database. Includes total user, exam, and result counts, a platform-wide average score, and a per-role user breakdown. Falls back to last-known sample data if a database error occurs so the dashboard never goes blank.
+
+**Auth**: Bearer JWT — ADMIN role required.
+
+**Response** `200 OK`
+
+<ResponseField name="totalUsers" type="number">
+  Total number of registered user accounts.
+</ResponseField>
+<ResponseField name="stats" type="object">
+  Nested stats object.
+
+  <Expandable title="stats fields">
+    <ResponseField name="totalExams" type="number">
+      Total number of exams created on the platform.
+    </ResponseField>
+    <ResponseField name="completedExams" type="number">
+      Total number of exam submission attempts (result records) across all students.
+    </ResponseField>
+    <ResponseField name="averageScore" type="number">
+      Platform-wide mean score across all result records, rounded to two decimal places.
+    </ResponseField>
+    <ResponseField name="rank" type="number">
+      Reserved field, always `0` in the current implementation.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+<ResponseField name="usersByRole" type="array">
+  Array of role-distribution objects, each with:
+  - `name` (`"Students"`, `"Instructors"`, `"Admins"`)
+  - `value` — count of accounts with that role
+  - `color` — hex colour code used by the dashboard chart
+</ResponseField>
+<ResponseField name="upcomingExams" type="array">
+  Reserved for future use — always an empty array in the current release.
+</ResponseField>
+<ResponseField name="recentResults" type="array">
+  Reserved for future use — always an empty array in the current release.
+</ResponseField>
+<ResponseField name="performanceData" type="array">
+  Reserved for future use — always an empty array in the current release.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/admin/dashboard \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/admin/users
+
+Returns a flat list of every registered user account. Each entry is a safe DTO (no password hash) with the account's current verification status surfaced as `"active"` or `"inactive"`.
+
+**Auth**: Bearer JWT — ADMIN role required.
+
+**Response** `200 OK` — array of user objects.
+
+<ResponseField name="id" type="string">
+  User ID as a string.
+</ResponseField>
+<ResponseField name="username" type="string">
+  Account username.
+</ResponseField>
+<ResponseField name="email" type="string">
+  Registered email address.
+</ResponseField>
+<ResponseField name="role" type="string">
+  Lowercase role string: `"student"`, `"instructor"`, or `"admin"`.
+</ResponseField>
+<ResponseField name="fullName" type="string">
+  Display name, or `null` if not provided.
+</ResponseField>
+<ResponseField name="phoneNumber" type="string">
+  10-digit phone number, or `null`.
+</ResponseField>
+<ResponseField name="status" type="string">
+  `"active"` if the email has been verified; `"inactive"` otherwise.
+</ResponseField>
+<ResponseField name="createdAt" type="string">
+  Account creation date string.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/admin/users \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/admin/users/stats
+
+Returns aggregated role-based counts for all users on the platform. Useful for the admin sidebar or summary cards.
+
+**Auth**: Bearer JWT — ADMIN role required.
+
+**Response** `200 OK`
+
+<ResponseField name="totalUsers" type="number">
+  Total registered accounts across all roles.
+</ResponseField>
+<ResponseField name="adminCount" type="number">
+  Number of accounts with the `"admin"` role.
+</ResponseField>
+<ResponseField name="instructorCount" type="number">
+  Number of accounts with the `"instructor"` role.
+</ResponseField>
+<ResponseField name="studentCount" type="number">
+  Number of accounts with the `"student"` role.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/admin/users/stats \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/admin/users/{userId}/deletion-impact
+
+Previews the cascading data that would be permanently deleted if the specified user were removed. Call this endpoint before executing a deletion to show the admin a confirmation summary.
+
+**Auth**: Bearer JWT — ADMIN role required.
+
+**Response** `200 OK`
+
+<ResponseField name="success" type="boolean">
+  `true` when the user was found and impact was computed.
+</ResponseField>
+<ResponseField name="impact" type="object">
+  Deletion-impact summary.
+
+  <Expandable title="impact fields">
+    <ResponseField name="userId" type="number">
+      ID of the user whose data would be deleted.
+    </ResponseField>
+    <ResponseField name="username" type="string">
+      Username of the target account.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      Email of the target account.
+    </ResponseField>
+    <ResponseField name="verificationTokens" type="number">
+      Count of email verification tokens that will be deleted.
+    </ResponseField>
+    <ResponseField name="enrollments" type="number">
+      Count of course enrollment records that will be deleted.
+    </ResponseField>
+    <ResponseField name="results" type="number">
+      Count of exam result records that will be deleted.
+    </ResponseField>
+    <ResponseField name="courses" type="number">
+      Count of courses owned by this instructor that will be deleted (relevant when deleting instructor accounts).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/admin/users/15/deletion-impact \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## DELETE /api/admin/users/{userId}
+
+Permanently deletes the specified user account and **all associated data** in a single cascading operation. This includes email verification tokens, course enrollment records, exam results, and — for instructor accounts — any courses they created.
+
+**Auth**: Bearer JWT — ADMIN role required.
+
+<Warning>
+  This operation is **irreversible**. The following data is permanently deleted in one transaction:
+  - The user account
+  - All email verification tokens for the user
+  - All course enrollments the student holds
+  - All exam result records submitted by the user
+  - All courses created by the user (instructor accounts only), including their associated enrollments and exams
+
+  Always call `GET /api/admin/users/{userId}/deletion-impact` first to confirm the scope before executing.
+</Warning>
+
+**Response** `200 OK`
+
+<ResponseField name="success" type="boolean">
+  `true` when the user and all related data were deleted.
+</ResponseField>
+<ResponseField name="message" type="string">
+  `"User and all related data deleted successfully"`.
+</ResponseField>
+<ResponseField name="deletionImpact" type="object">
+  Summary of what was actually deleted: `verificationTokens`, `enrollments`, `results`, `courses` counts.
+</ResponseField>
+
+```bash
+curl -X DELETE http://localhost:8080/api/admin/users/15 \
+  -H 'Authorization: Bearer <token>'
+```

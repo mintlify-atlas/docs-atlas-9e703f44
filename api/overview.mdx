@@ -1,0 +1,146 @@
+---
+title: "Examwizards REST API Overview and Base URL"
+sidebarTitle: "Overview"
+description: "A complete reference for the Examwizards REST API: base URL, content type, versioning, public vs authenticated endpoints, roles, and error response format."
+---
+
+The Examwizards backend exposes a stateless REST API built on Spring Boot 2.7. All resources live under a single base path, every request and response body is JSON (unless noted), and access is controlled by role-bearing JWT tokens issued at login. This page covers everything you need to make your first call — base URL, headers, which endpoints are public, how errors are shaped, and where each resource group lives.
+
+## Base URL
+
+The API base URL is determined by your environment. For local development the default is:
+
+```
+http://localhost:8080/api
+```
+
+In production and staging deployments the URL is injected through the `VITE_API_BASE_URL` environment variable, which the React frontend reads at build time. Set it in your shell or `.env` file before running `npm run build`:
+
+```bash
+VITE_API_BASE_URL=https://api.examwizards.example.com/api
+```
+
+All endpoint paths documented in this reference are relative to that base. For example, the login endpoint is `POST /api/auth/login`.
+
+## Headers
+
+Every request that sends or expects JSON must include the `Content-Type` header. File uploads (e.g. avatar images) use `multipart/form-data` instead.
+
+```
+Content-Type: application/json
+```
+
+Authenticated requests must also include a Bearer token:
+
+```
+Authorization: Bearer <your-jwt-token>
+```
+
+Tokens are obtained by calling `POST /api/auth/login`. See the [Authentication guide](/api/authentication) for the full flow.
+
+## CORS
+
+The server allows requests from any origin (`*`) with credentials during development. Tighten the `allowedOriginPatterns` list in `SecurityConfig` before deploying to production.
+
+## Versioning
+
+There is no URL version prefix at this time. The API is versioned implicitly via the deployment lifecycle. Breaking changes will be communicated in the changelog.
+
+## Roles
+
+Every authenticated user carries exactly one of the following roles, encoded inside their JWT. Spring Security enforces the role on each protected endpoint.
+
+| Role | Description |
+|---|---|
+| `STUDENT` | Enroll in courses, take exams, view results and personal dashboard. |
+| `INSTRUCTOR` | Create and manage courses and exams, view instructor analytics. |
+| `ADMIN` | Full platform access: user management, content moderation, contact inbox, admin dashboard. |
+
+## Public Endpoints
+
+The following endpoints are accessible without a token. All other paths require a valid `Authorization` header.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/auth/register` | Create a student or instructor account. |
+| `POST` | `/api/auth/login` | Obtain a JWT. |
+| `GET` | `/api/auth/verify-email` | Verify email address from link. |
+| `POST` | `/api/auth/request-password-reset` | Request a password-reset email. |
+| `POST` | `/api/auth/reset-password` | Confirm a password reset. |
+| `POST` | `/api/auth/resend-verification` | Re-send the verification email. |
+| `GET` | `/api/auth/health` | Auth service liveness check. |
+| `GET` | `/api/courses/public` | Fetch the public course catalog. |
+| `GET` | `/api/reviews/public` | Fetch published reviews for the landing page. |
+| `GET` | `/api/reviews/recent` | Fetch the most recent published reviews. |
+| `GET` | `/api/reviews/statistics` | Fetch aggregate review statistics. |
+| `POST` | `/api/contact` | Submit a contact form message. |
+
+## Error Response Format
+
+When a request cannot be fulfilled, the API returns a JSON body with a `status` code, a human-readable `message`, and a Unix-millisecond `timestamp`. The HTTP status code in the response line always matches the `status` field.
+
+```json
+{
+  "status": 401,
+  "message": "User not found. Please check your username/email and try again.",
+  "timestamp": 1718000000000
+}
+```
+
+<Note>
+  Some error responses also include extra context fields such as `emailVerified` or `email` to help the client decide the next action — for example, prompting the user to verify their inbox when the account exists but is unverified.
+</Note>
+
+Common status codes returned by the API:
+
+| Status | Meaning |
+|---|---|
+| `200` | Success. |
+| `400` | Bad request — validation failure or duplicate resource. |
+| `401` | Unauthenticated — missing, expired, or invalid token. |
+| `403` | Forbidden — authenticated but insufficient role, or email not verified. |
+| `500` | Internal server error. |
+
+## Resource Groups
+
+Every resource group has a dedicated base path. Paths marked **Auth required** need a valid `Authorization: Bearer` header on every call.
+
+| Resource | Base Path | Auth Required |
+|---|---|---|
+| Auth | `/api/auth` | Public (per-endpoint) |
+| Courses | `/api/courses` | Mixed (public catalog is open) |
+| Exams | `/api/exams` | Yes |
+| Questions | `/api/questions` | Yes |
+| Enrollments | `/api/enrollments` | Yes |
+| Results | `/api/results` | Yes |
+| Payments | `/api/payment` | Yes |
+| Users | `/api/users` | Yes |
+| Student dashboard | `/api/student` | Yes — `STUDENT` |
+| Instructor dashboard | `/api/instructor` | Yes — `INSTRUCTOR` |
+| Admin | `/api/admin` | Yes — `ADMIN` |
+
+## Explore by Resource
+
+<CardGroup cols={3}>
+  <Card title="Auth" icon="key" href="/api/authentication">
+    Register, log in, verify email, and reset passwords.
+  </Card>
+  <Card title="Courses" icon="book" href="/api/courses">
+    Browse the public catalog, create courses, and manage visibility.
+  </Card>
+  <Card title="Exams" icon="clipboard-list" href="/api/exams">
+    Create timed assessments, fetch questions, and submit answers.
+  </Card>
+  <Card title="Enrollments" icon="user-plus" href="/api/enrollments">
+    Enroll in free or paid courses and track enrollment status.
+  </Card>
+  <Card title="Results" icon="chart-bar" href="/api/results">
+    Retrieve exam results and score breakdowns for students.
+  </Card>
+  <Card title="Users" icon="users" href="/api/users">
+    Fetch and update user profiles and account settings.
+  </Card>
+  <Card title="Admin" icon="shield-halved" href="/api/admin">
+    Manage users, moderate content, and access platform analytics.
+  </Card>
+</CardGroup>

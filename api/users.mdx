@@ -1,0 +1,128 @@
+---
+title: "Users API: Get and Update Your Profile"
+sidebarTitle: "Users"
+description: "Reference for the /api/users endpoints: reading the authenticated user's profile and updating username, phone, password, full name, gender, and avatar URL with field-level validation."
+---
+
+The Users API exposes two endpoints focused exclusively on self-service profile management. Every user — student, instructor, or admin — can retrieve their own profile and update the fields listed below. Email addresses are intentionally locked after registration for security reasons; any attempt to change an email is rejected with a `400 Bad Request`. Username changes invalidate the current JWT, requiring an immediate re-login with the new credentials.
+
+---
+
+## GET /api/users/me
+
+Returns the complete profile of the currently authenticated user. The lookup is first attempted by username extracted from the JWT; if not found (e.g. when the JWT was issued against an email), it falls back to an email-based lookup.
+
+**Auth**: Bearer JWT — any authenticated role.
+
+**Response** `200 OK`
+
+<ResponseField name="id" type="number">
+  Internal user ID.
+</ResponseField>
+<ResponseField name="username" type="string">
+  Current unique username.
+</ResponseField>
+<ResponseField name="email" type="string">
+  Registered email address. This field is read-only and cannot be changed.
+</ResponseField>
+<ResponseField name="role" type="string">
+  Account role: `"student"`, `"instructor"`, or `"admin"`.
+</ResponseField>
+<ResponseField name="fullName" type="string">
+  Display name, or `null` if not set.
+</ResponseField>
+<ResponseField name="avatarUrl" type="string">
+  Profile picture URL, or `null` if not set.
+</ResponseField>
+<ResponseField name="gender" type="string">
+  Gender value stored on the account, or `null` if not set.
+</ResponseField>
+<ResponseField name="phoneNumber" type="string">
+  10-digit phone number, or `null` if not set.
+</ResponseField>
+
+```bash
+curl http://localhost:8080/api/users/me \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## PUT /api/users/me
+
+Updates one or more profile fields for the authenticated user. Fields not included in the request body are left unchanged. The response is the updated profile DTO — unless the username was changed, in which case a special re-login response is returned (see note below).
+
+**Auth**: Bearer JWT — any authenticated role.
+
+<ParamField body="username" type="string">
+  New unique username. Must not be taken by another account. **Changing the username immediately invalidates the current JWT** — the server returns a re-login prompt instead of the profile DTO, and the client must authenticate again with the new username.
+</ParamField>
+<ParamField body="phoneNumber" type="string">
+  New 10-digit phone number (digits only, no spaces or dashes). Must pass the regex `^[0-9]{10}$`. Must be unique across all accounts.
+</ParamField>
+<ParamField body="fullName" type="string">
+  Updated display name. No uniqueness constraint.
+</ParamField>
+<ParamField body="gender" type="string">
+  Updated gender value. Free-form string stored as-is.
+</ParamField>
+<ParamField body="avatarUrl" type="string">
+  Updated profile picture URL. Stored as-is; no URL validation is applied server-side.
+</ParamField>
+<ParamField body="currentPassword" type="string">
+  Required when changing the password. Must match the current BCrypt hash.
+</ParamField>
+<ParamField body="newPassword" type="string">
+  The desired new password. Must differ from `currentPassword`. Stored as a BCrypt hash.
+</ParamField>
+<ParamField body="email" type="string">
+  **Blocked.** Any value that differs from the current email returns `400 Bad Request` with message `"Email address cannot be changed for security reasons"`.
+</ParamField>
+
+**Response** `200 OK` — updated `UserProfileDTO` with `id`, `username`, `email`, `role`, `fullName`, `avatarUrl`, `gender`, and `phoneNumber`.
+
+**Username-change response** `200 OK` (special case):
+
+<ResponseField name="usernameChanged" type="boolean">
+  Always `true` when this response shape is returned.
+</ResponseField>
+<ResponseField name="message" type="string">
+  Instruction to log in again with the new username.
+</ResponseField>
+<ResponseField name="newUsername" type="string">
+  The newly assigned username.
+</ResponseField>
+
+<Note>
+  When a username change is detected, the endpoint saves the update and **immediately returns** without processing any other fields in the same request. To update both the username and, say, the phone number, send two sequential requests.
+</Note>
+
+<Warning>
+  Changing your username invalidates your current JWT. The frontend must discard the stored token and redirect the user to the login page.
+</Warning>
+
+```bash
+# Update full name and phone number
+curl -X PUT http://localhost:8080/api/users/me \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "fullName": "Jane A. Doe",
+    "phoneNumber": "9876543210"
+  }'
+
+# Change password
+curl -X PUT http://localhost:8080/api/users/me \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "currentPassword": "OldPass123!",
+    "newPassword": "NewPass456!"
+  }'
+
+# Change username (triggers re-login)
+curl -X PUT http://localhost:8080/api/users/me \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"username": "jane_doe_2025"}'
+```
