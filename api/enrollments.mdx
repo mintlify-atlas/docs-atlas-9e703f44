@@ -1,7 +1,7 @@
 ---
-title: "Enrollments API: Manage Student Course Access"
+title: "Enrollments API: View and Cancel Course Memberships"
 sidebarTitle: "Enrollments"
-description: "Reference for all /api/enrollments endpoints: paginated enrollment listing, per-enrollment details, membership checks, cancellation, and instructor-facing course and stats views."
+description: "Reference for all /api/enrollments endpoints: paginated listing, enrollment details, membership checks, cancellation, and instructor revenue statistics."
 ---
 
 The Enrollments API gives students visibility into every course they belong to and lets them cancel memberships they no longer want. Instructors use it to inspect who is enrolled in their courses and to review aggregated revenue and enrollment stats. All responses enforce ownership — students can only read or cancel their own enrollment records, and instructors can only view data for courses they own.
@@ -189,7 +189,7 @@ curl "http://localhost:8080/api/enrollments/course/42?page=0&size=20" \
 
 ## GET /api/enrollments/instructor/stats
 
-Returns aggregated enrollment and revenue statistics for all courses owned by the authenticated instructor. The exact fields are computed by `EnrollmentService.getInstructorStats`.
+Returns aggregated enrollment and revenue statistics for all courses owned by the authenticated instructor.
 
 **Auth**: Bearer JWT — INSTRUCTOR role required.
 
@@ -199,13 +199,13 @@ Returns aggregated enrollment and revenue statistics for all courses owned by th
   Sum of all active enrollments across the instructor's courses.
 </ResponseField>
 <ResponseField name="totalRevenue" type="number">
-  Total revenue in INR from paid enrollments.
+  Total revenue in INR calculated from paid-course enrollment counts multiplied by course price.
 </ResponseField>
-<ResponseField name="courseCount" type="number">
+<ResponseField name="totalCourses" type="number">
   Number of courses owned by the instructor.
 </ResponseField>
-<ResponseField name="enrollmentsByCourse" type="array">
-  Per-course breakdown, each entry containing `courseId`, `courseName`, and `enrollmentCount`.
+<ResponseField name="courseStats" type="object">
+  Per-course breakdown keyed by course ID (as a string). Each entry is an object containing `courseId`, `courseName`, `enrollmentCount`, `pricing`, and `price`.
 </ResponseField>
 
 ```bash

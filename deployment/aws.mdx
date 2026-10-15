@@ -18,11 +18,9 @@ The production target for Examwizards is AWS ECS Fargate sitting behind an Appli
 | ECS Fargate | Runs the Spring Boot API (`examwizards-api`) and Gemini chatbot (`examwizards-chatbot`) as serverless containers |
 | Application Load Balancer | TLS termination, health-check routing, and traffic distribution across multi-AZ Fargate tasks |
 | RDS MySQL 8 (Multi-AZ) | Primary relational store; standby replica handles automatic failover in prod |
-| ElastiCache Redis | Session caching and coordination layer |
 | S3 + CloudFront | Hosts the compiled React SPA assets and serves uploads via CDN |
 | WAF + ACM | Rate-limiting rules at the edge; ACM manages TLS certificates |
 | Secrets Manager | Stores `DB_PASSWORD`, `JWT_SECRET`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `GENAI_API_KEY` |
-| SQS | Async job queue for email dispatch and webhook processing |
 | ECR | Container image registry — one repository per service per environment |
 | CloudWatch | Centralised logs (via `awslogs` driver), metrics, and alarms |
 

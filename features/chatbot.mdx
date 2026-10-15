@@ -1,7 +1,7 @@
 ---
-title: "AI Chatbot: Google Gemini-Powered Study Assistant"
+title: "AI Chatbot: Gemini-Powered Study Assistant for Students"
 sidebarTitle: "Chatbot"
-description: "A standalone Node.js microservice wraps Google Gemini 2.5 Flash to answer platform questions for students, instructors, and admins — configured with one env var."
+description: "A standalone Node.js microservice wraps Google Gemini 2.5 Flash to answer Examwizards questions for students, instructors, and admins via a single env var."
 ---
 
 The Examwizards chatbot is a dedicated Node.js microservice that exposes two HTTP endpoints and runs separately from the Spring Boot backend. It uses the `@google/genai` SDK to call Google Gemini 2.5 Flash with a context-rich system instruction that scopes every response to the Examwizards platform. The service maintains a simple in-memory conversation history per server instance so follow-up questions work naturally within a session.

@@ -1,7 +1,7 @@
 ---
 title: "Exams: Build Timed Assessments and Auto-Grade Submissions"
 sidebarTitle: "Exams"
-description: "Instructors build timed exams attached to a course, add MCQ and text questions, and let the server auto-grade submissions and email results directly to students."
+description: "Instructors build timed exams for a course, add MCQ and text questions, and let the server auto-grade submissions and email results directly to students."
 ---
 
 Exams in Examwizards are tightly coupled to courses — every exam belongs to exactly one course, and students can only see and submit exams for courses they are enrolled in. Instructors create exams with a duration, optional start/end windows, and a set of questions that can be multiple-choice (single or multi-select) or free-text. When a student submits, the server scores MCQ answers automatically, stores the result, and sends an HTML email with the student's score, percentage, and feedback.
@@ -25,7 +25,7 @@ Exams in Examwizards are tightly coupled to courses — every exam belongs to ex
 
 ## Creating an Exam
 
-`POST /api/exams` accepts a JSON body. The `course` object must include a valid course `id` that the instructor owns.
+`POST /api/exams` accepts a JSON body. The `course` object must include a valid course `id` that the instructor owns. The endpoint returns HTTP 200 with no response body on success.
 
 ```bash
 curl -X POST http://localhost:8080/api/exams \
@@ -61,7 +61,7 @@ curl -X POST http://localhost:8080/api/exams \
 ```
 
 <Note>
-  `correct_options` contains zero-based **indices** into the `options` array, not option IDs. Index `1` means the second option — `"3"` in the example above.
+  `POST /api/exams` returns HTTP 200 with an empty body. To retrieve the created exam's ID and full details, follow up with `GET /api/exams/instructor`. `correct_options` contains zero-based **indices** into the `options` array, not option IDs. Index `1` means the second option — `"3"` in the example above.
 </Note>
 
 ## Listing Exams
@@ -129,6 +129,8 @@ curl http://localhost:8080/api/exams/7 \
 ```
 
 ## Updating and Deleting
+
+`PUT /api/exams/{id}` returns an enhanced JSON object containing the updated exam's fields plus `"success": true` and `"message": "Exam updated successfully"`. `DELETE /api/exams/{id}` returns HTTP 200 with no body.
 
 ```bash
 # Update an exam

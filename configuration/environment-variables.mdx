@@ -1,7 +1,7 @@
 ---
-title: "Environment Variables Reference for Examwizards"
+title: "Examwizards Environment Variables Complete Reference"
 sidebarTitle: "Environment Variables"
-description: "All env vars Examwizards needs: MySQL, Gmail SMTP, Razorpay, Gemini AI, JWT signing secret, bootstrap admin credentials, and Vite build-time frontend vars."
+description: "All environment variables Examwizards needs: MySQL, Gmail SMTP, Razorpay, Gemini AI, JWT secret, admin bootstrap credentials, and Vite build-time vars."
 ---
 
 Examwizards is configured entirely through environment variables — there are no hard-coded secrets in source. At runtime the application reads these from a `.env` file at the repository root (Docker Compose picks it up automatically) or from the host environment (ECS task definitions, Azure App Service, etc.). Copy `.env.example` to `.env` and populate each value before starting any service.
@@ -19,11 +19,11 @@ These three variables are required by every backend startup. In Docker Compose t
 </ParamField>
 
 <ParamField query="DB_USERNAME" type="string" required>
-  MySQL username that owns the `examwizards` database. The Compose stack creates the user `examport` by default.
+  MySQL username that owns the `examwizards` database. When running with Docker Compose, the MySQL user is always `examport` (hardcoded in `docker-compose.yml`); this variable is used for bare-metal and ECS deployments where you control the database credentials directly.
 </ParamField>
 
 <ParamField query="DB_PASSWORD" type="string" required>
-  Password for `DB_USERNAME`. Also used as `MYSQL_ROOT_PASSWORD` for the MySQL container via the `${DB_PASSWORD:-root}` default in `docker-compose.yml`.
+  Password for `DB_USERNAME` in bare-metal and ECS deployments. In the Docker Compose stack, `DB_PASSWORD` from `.env` is used only as `MYSQL_ROOT_PASSWORD` (via `${DB_PASSWORD:-root}`) — the MySQL user password and backend connection password are hardcoded to `examport123` in `docker-compose.yml` and are independent of this variable.
 </ParamField>
 
 ## Email (Gmail SMTP)

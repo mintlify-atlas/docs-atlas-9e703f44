@@ -1,7 +1,7 @@
 ---
 title: "Auth API: Register, Login, and Password Reset Endpoints"
 sidebarTitle: "Auth"
-description: "Complete reference for all /api/auth endpoints covering user registration, JWT-based login, email verification, password reset, and re-sending verification emails."
+description: "Complete reference for all /api/auth endpoints: user registration, JWT login, email verification, password reset, and re-sending verification emails."
 ---
 
 The Auth API is the entry point for every Examwizards user. It handles new account creation (students and instructors only — admin accounts are provisioned separately), issues signed JWT tokens on login, and manages the full email-verification and password-reset lifecycle. Every request that modifies sensitive state sends a transactional email to the user's registered address.
@@ -127,13 +127,16 @@ Authenticates a user by username **or** email plus password. Returns a signed JW
   The account's role: `"student"`, `"instructor"`, or `"admin"`.
 </ResponseField>
 <ResponseField name="fullName" type="string">
-  Display name of the user.
+  Display name of the user, or `null` if not set.
 </ResponseField>
 <ResponseField name="avatarUrl" type="string">
   Profile picture URL, or `null` if not set.
 </ResponseField>
 <ResponseField name="gender" type="string">
   Gender value stored on the profile, or `null`.
+</ResponseField>
+<ResponseField name="phoneNumber" type="string">
+  Registered phone number, or `null` if not set.
 </ResponseField>
 <ResponseField name="emailVerified" type="boolean">
   Always `true` for a successful login response.
@@ -238,7 +241,7 @@ curl -X POST http://localhost:8080/api/auth/reset-password \
 
 ## POST /api/auth/resend-verification
 
-Resends the email verification link to an unverified account. If the account is already verified the endpoint returns `200` with a success message rather than an error, making it safe to call idempotently.
+Resends the email verification link to an unverified account. If the account is already verified the endpoint returns `200` with a success message. If the email address does not exist in the system a `400 Bad Request` is returned.
 
 **Auth**: Public — no token required.
 

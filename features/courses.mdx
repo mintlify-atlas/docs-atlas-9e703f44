@@ -1,7 +1,7 @@
 ---
 title: "Courses: Create, Publish, and Manage Learning Content"
 sidebarTitle: "Courses"
-description: "Instructors create public or private courses with free or paid pricing, control visibility via CSV email lists, and manage enrollments from a single set of REST endpoints."
+description: "Instructors create public or private courses with free or paid pricing, control visibility via CSV email lists, and manage enrollments through a REST API."
 ---
 
 Courses are the primary unit of content in Examwizards. An instructor creates a course, sets its visibility (`PUBLIC` or `PRIVATE`) and pricing model (`FREE` or `PAID`), and optionally uploads a CSV of student email addresses for private access. Public courses appear in the browseable catalog; private courses are only visible to students whose email addresses appear in the allowlist. Exams are always attached to a course, so the course is also the access-control boundary for exam delivery.
@@ -231,8 +231,36 @@ curl http://localhost:8080/api/courses/12/access \
   "hasAccess": true,
   "accessType": "enrolled",
   "courseId": 12,
-  "courseName": "Introduction to Algebra"
+  "courseName": "Introduction to Algebra",
+  "visibility": "PUBLIC",
+  "pricing": "FREE"
 }
+```
+
+## Student Enrolled Courses
+
+`GET /api/courses/student/enrolled` returns a list of all courses the authenticated student is currently enrolled in, including each course's pricing, visibility, enrollment date, and instructor summary.
+
+```bash
+curl http://localhost:8080/api/courses/student/enrolled \
+  -H "Authorization: Bearer <student_token>"
+```
+
+```json
+[
+  {
+    "id": 12,
+    "name": "Introduction to Algebra",
+    "description": "A beginner course covering algebraic fundamentals.",
+    "visibility": "PUBLIC",
+    "pricing": "FREE",
+    "enrollmentDate": "2025-08-15T14:30:00",
+    "instructor": {
+      "username": "prof_smith",
+      "fullName": "Professor Smith"
+    }
+  }
+]
 ```
 
 ## Endpoint Reference
@@ -249,3 +277,4 @@ curl http://localhost:8080/api/courses/12/access \
 | `GET` | `/api/courses/{courseId}/access` | Any | Check access for current user |
 | `POST` | `/api/courses/{courseId}/enroll` | Student | Enroll in a free public course |
 | `POST` | `/api/courses/{courseId}/purchase` | Student | Initiate payment for a paid course |
+| `GET` | `/api/courses/student/enrolled` | Student | List all courses the student is enrolled in |

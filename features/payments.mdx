@@ -1,7 +1,7 @@
 ---
 title: "Payments: Razorpay Integration for Paid Course Enrollment"
 sidebarTitle: "Payments"
-description: "Examwizards creates Razorpay orders server-side, opens the checkout modal on the frontend, then verifies the HMAC-SHA256 signature before granting course access."
+description: "Examwizards paid enrollment uses Razorpay: the backend creates an order, a modal collects payment, then the server verifies the signature before enrolling."
 ---
 
 Paid courses in Examwizards use [Razorpay](https://razorpay.com) as the payment gateway. The integration follows Razorpay's recommended server-to-server order verification flow: the backend creates a signed order, the frontend opens the Razorpay checkout modal, and after the student completes payment the backend verifies the response signature before creating the enrollment record. No payment data is stored in the Examwizards database beyond the Razorpay `orderId` and `paymentId` that are written to the enrollment's `paymentTransactionId` field.
@@ -72,8 +72,13 @@ const options = {
   name: "ExamWizards",
   description: order.courseName,
   handler: function (response) {
-    // response contains razorpay_order_id, razorpay_payment_id, razorpay_signature
-    verifyPayment(response, order.courseId);
+    // Razorpay returns snake_case fields; map them to camelCase for the backend DTO
+    verifyPayment({
+      orderId:   response.razorpay_order_id,
+      paymentId: response.razorpay_payment_id,
+      signature: response.razorpay_signature,
+      courseId:  order.courseId,
+    });
   },
 };
 const rzp = new window.Razorpay(options);
@@ -82,16 +87,16 @@ rzp.open();
 
 ## Step 4 — Verify the Payment
 
-After the modal handler fires, send the three Razorpay response fields plus the `courseId` to the backend for verification:
+After the modal handler fires, send the three Razorpay response fields (mapped to camelCase) plus the `courseId` to the backend for verification:
 
 ```bash
 curl -X POST http://localhost:8080/api/courses/payment/verify \
   -H "Authorization: Bearer <student_token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "razorpay_order_id": "order_PQR123456789",
-    "razorpay_payment_id": "pay_ABC987654321",
-    "razorpay_signature": "3d3e4f5a6b...",
+    "orderId": "order_PQR123456789",
+    "paymentId": "pay_ABC987654321",
+    "signature": "3d3e4f5a6b...",
     "courseId": 14
   }'
 ```

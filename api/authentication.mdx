@@ -1,5 +1,5 @@
 ---
-title: "Authenticating with the Examwizards API Using JWT"
+title: "Examwizards API Authentication and JWT Token Guide"
 sidebarTitle: "Authentication"
 description: "Learn how to register, verify your email, and obtain a JWT from the Examwizards login endpoint to authenticate every subsequent API request."
 ---
@@ -19,7 +19,7 @@ The Examwizards API uses stateless JWT authentication. Every protected endpoint 
         "username": "jdoe",
         "email": "jdoe@example.com",
         "password": "Secret123!",
-        "role": "STUDENT"
+        "role": "student"
       }'
     ```
 
@@ -29,6 +29,10 @@ The Examwizards API uses stateless JWT authentication. Every protected endpoint 
     {
       "username": "jdoe",
       "role": "student",
+      "fullName": null,
+      "avatarUrl": null,
+      "gender": null,
+      "phoneNumber": null,
       "emailVerified": false,
       "verificationEmailSent": true,
       "message": "Registration successful! Please check your email to verify your account before logging in."
@@ -128,7 +132,7 @@ If a user forgets their password, the two-step reset flow lets them set a new on
 
 <Steps>
   <Step title="Request a reset link">
-    Send the account's email address to the request endpoint. The API dispatches a reset link regardless of whether the email matches an account, to prevent user enumeration.
+    Send the account's email address to the request endpoint. If the email matches a registered account, a reset link is dispatched. If no account is found, the API returns `400` with an `error` field.
 
     ```bash
     curl -X POST http://localhost:8080/api/auth/request-password-reset \
@@ -227,6 +231,36 @@ The JWT encodes the user's role as a Spring Security authority (e.g. `ROLE_STUDE
   <ParamField body="fullName" type="string">
     Optional display name shown in the UI.
   </ParamField>
+
+  **Response fields**
+
+  <ResponseField name="username" type="string">
+    The registered account's username.
+  </ResponseField>
+  <ResponseField name="role" type="string">
+    The role assigned to the account: `student` or `instructor`.
+  </ResponseField>
+  <ResponseField name="fullName" type="string">
+    Display name provided at registration, or `null` if omitted.
+  </ResponseField>
+  <ResponseField name="avatarUrl" type="string">
+    Avatar URL, always `null` at registration time.
+  </ResponseField>
+  <ResponseField name="gender" type="string">
+    Gender field, always `null` at registration time.
+  </ResponseField>
+  <ResponseField name="phoneNumber" type="string">
+    Phone number provided at registration, or `null` if omitted.
+  </ResponseField>
+  <ResponseField name="emailVerified" type="boolean">
+    Always `false` on a successful registration — the user must verify their email before logging in.
+  </ResponseField>
+  <ResponseField name="verificationEmailSent" type="boolean">
+    `true` if the verification email was dispatched successfully.
+  </ResponseField>
+  <ResponseField name="message" type="string">
+    Human-readable confirmation or warning message.
+  </ResponseField>
 </Accordion>
 
 <Accordion title="POST /api/auth/login">
@@ -252,6 +286,15 @@ The JWT encodes the user's role as a Spring Security authority (e.g. `ROLE_STUDE
   <ResponseField name="role" type="string">
     The account's role: `student`, `instructor`, or `admin`.
   </ResponseField>
+  <ResponseField name="fullName" type="string">
+    The account holder's display name, or `null` if not set.
+  </ResponseField>
+  <ResponseField name="avatarUrl" type="string">
+    URL to the user's avatar image, or `null` if not set.
+  </ResponseField>
+  <ResponseField name="gender" type="string">
+    The account holder's gender, or `null` if not set.
+  </ResponseField>
   <ResponseField name="emailVerified" type="boolean">
     Always `true` on a successful login — unverified accounts are rejected with `403`.
   </ResponseField>
@@ -271,7 +314,7 @@ The JWT encodes the user's role as a Spring Security authority (e.g. `ROLE_STUDE
 </Accordion>
 
 <Accordion title="POST /api/auth/request-password-reset">
-  Dispatches a password-reset email.
+  Dispatches a password-reset email if the provided address matches a registered account. Returns `400` with an `error` field if no account is found.
 
   **Request body**
 
@@ -301,4 +344,20 @@ The JWT encodes the user's role as a Spring Security authority (e.g. `ROLE_STUDE
   <ParamField body="email" type="string" required>
     The email address of the unverified account.
   </ParamField>
+</Accordion>
+
+<Accordion title="GET /api/auth/health">
+  Returns the liveness status of the auth service. No authentication required.
+
+  **Response fields**
+
+  <ResponseField name="status" type="string">
+    Always `"OK"` when the service is running.
+  </ResponseField>
+  <ResponseField name="message" type="string">
+    Human-readable status message.
+  </ResponseField>
+  <ResponseField name="timestamp" type="number">
+    Unix timestamp (milliseconds) of the response.
+  </ResponseField>
 </Accordion>

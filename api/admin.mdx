@@ -1,10 +1,40 @@
 ---
 title: "Admin API: Dashboard, User Management, and Analytics"
 sidebarTitle: "Admin"
-description: "Reference for all /api/admin endpoints: platform-wide dashboard statistics, full user listing, role-based counts, cascading-delete impact preview, and permanent user removal."
+description: "Reference for all /api/admin endpoints: dashboard stats, user listing, role-based counts, cascading-delete impact preview, and permanent user removal."
 ---
 
 The Admin API is restricted to accounts with the `ADMIN` role and exposes the operational controls needed to monitor the Examwizards platform and manage users. The dashboard endpoint aggregates live counts from the database (users, exams, result attempts, and average score) with a per-role breakdown. User management endpoints provide full visibility into every account and a safe, two-step deletion flow: first preview the cascading impact, then execute the permanent removal.
+
+---
+
+## GET /api/admin/test
+
+Returns a plain-text liveness probe for the admin controller. Use this to confirm the admin route is reachable and the security filter is passing the token correctly.
+
+**Auth**: Bearer JWT — ADMIN role required.
+
+**Response** `200 OK` — plain string `"Admin controller is working!"`
+
+```bash
+curl http://localhost:8080/api/admin/test \
+  -H 'Authorization: Bearer <token>'
+```
+
+---
+
+## GET /api/admin/simple-dashboard
+
+Returns a static snapshot of sample platform statistics. Unlike `/dashboard`, this endpoint never queries the database — it always returns hardcoded example counts. Use it to verify dashboard UI rendering without a live database connection.
+
+**Auth**: Bearer JWT — ADMIN role required.
+
+**Response** `200 OK` — same shape as `GET /api/admin/dashboard` but with fixed sample values.
+
+```bash
+curl http://localhost:8080/api/admin/simple-dashboard \
+  -H 'Authorization: Bearer <token>'
+```
 
 ---
 
@@ -90,7 +120,7 @@ Returns a flat list of every registered user account. Each entry is a safe DTO (
   `"active"` if the email has been verified; `"inactive"` otherwise.
 </ResponseField>
 <ResponseField name="createdAt" type="string">
-  Account creation date string.
+  Account creation date string. Currently returns the placeholder value `"2024-01-01"` — a `createdAt` column has not yet been added to the `User` entity in this release.
 </ResponseField>
 
 ```bash

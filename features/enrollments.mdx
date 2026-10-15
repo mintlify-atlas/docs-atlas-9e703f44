@@ -1,7 +1,7 @@
 ---
 title: "Enrollments: Student Course Access and Lifecycle Management"
 sidebarTitle: "Enrollments"
-description: "Students enroll in free courses instantly, purchase paid courses via Razorpay, or receive automatic access to private courses — instructors view stats and manage access."
+description: "Students enroll in free courses directly, pay for paid courses via Razorpay, or receive automatic access to private courses managed by the instructor."
 ---
 
 An enrollment record is created every time a student gains access to a course. The access path depends on the course type: free public courses enroll instantly via a direct API call; paid public courses require a completed Razorpay transaction; and private courses auto-enroll students whose email addresses are listed in the instructor's uploaded CSV when the course is created or updated. Each enrollment carries a status (`ENROLLED`) and optionally a `paymentTransactionId` for paid enrollments. Instructors can view all enrollments for their courses, paginate through student lists, and retrieve aggregate stats from a single endpoint.

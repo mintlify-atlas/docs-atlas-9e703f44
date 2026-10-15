@@ -12,7 +12,7 @@ Examwizards is a full-stack, role-based online learning platform that brings stu
 |---|---|
 | API | Spring Boot 2.7, Java 17, Spring Security, JWT, JPA / Hibernate |
 | UI | React 18, TypeScript, Vite, Tailwind CSS, MUI, React Router 7 |
-| Data | MySQL 8 (RDS-compatible), Hibernate `ddl-auto` (Flyway migrations in-repo) |
+| Data | MySQL 8 (RDS-compatible); Hibernate `ddl-auto=validate`; Flyway in-repo (disabled by default — uses validated schema) |
 | Payments | Razorpay (order creation + webhook verification) |
 | Email | Gmail SMTP — registration verification, password reset, admin notifications |
 | AI Chatbot | Google Gemini (`gemini-2.5-flash`) via a standalone Node.js microservice |

@@ -1,7 +1,7 @@
 ---
-title: "Users API: Get and Update Your Profile"
+title: "Users API: Retrieve and Update Your Account Profile"
 sidebarTitle: "Users"
-description: "Reference for the /api/users endpoints: reading the authenticated user's profile and updating username, phone, password, full name, gender, and avatar URL with field-level validation."
+description: "Reference for /api/users: read the authenticated user's profile and update username, phone number, password, full name, gender, or avatar URL."
 ---
 
 The Users API exposes two endpoints focused exclusively on self-service profile management. Every user — student, instructor, or admin — can retrieve their own profile and update the fields listed below. Email addresses are intentionally locked after registration for security reasons; any attempt to change an email is rejected with a `400 Bad Request`. Username changes invalidate the current JWT, requiring an immediate re-login with the new credentials.

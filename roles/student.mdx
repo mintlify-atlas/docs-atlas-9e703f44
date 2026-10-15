@@ -1,7 +1,7 @@
 ---
 title: "Student Role: Enroll, Take Exams, and Track Progress"
 sidebarTitle: "Student"
-description: "Covers the full student journey on Examwizards — browsing the course catalog, enrolling in free or paid courses, taking timed exams, viewing auto-graded results, and checking the leaderboard."
+description: "Learn how students browse courses, enroll, take timed exams, view auto-graded results with letter grades, and track performance on Examwizards."
 ---
 
 Students are the primary learners on the Examwizards platform. Once registered and email-verified, a student can browse the public course catalog, enroll in free or paid courses, attempt timed exams tied to those courses, receive instant auto-graded results with letter grades, and track cumulative performance across their personal dashboard. Only courses a student is enrolled in expose their associated exams — access is enforced server-side before every exam attempt.
@@ -140,7 +140,7 @@ GET /api/results/{id}
 Authorization: Bearer <token>
 ```
 
-Returns the full result detail — including `answers` (the student's submitted responses), `timeTakenFormatted` (e.g. `"42:05"`), `userRank`, and `feedback`. The backend enforces ownership: a student can only fetch their own results; instructors may read any result for their course's exams.
+Returns the full result detail — including `answers` (the student's submitted responses), `timeTakenFormatted` (e.g. `"42:05"`), `userRank`, and `feedback`. The backend enforces ownership: a student can only fetch their own results; users with the `INSTRUCTOR` role may read any result record.
 
 ### Grade scale
 

@@ -1,5 +1,5 @@
 ---
-title: "Examwizards REST API Overview and Base URL"
+title: "Examwizards REST API Reference — Overview and Base URL"
 sidebarTitle: "Overview"
 description: "A complete reference for the Examwizards REST API: base URL, content type, versioning, public vs authenticated endpoints, roles, and error response format."
 ---
@@ -77,18 +77,17 @@ The following endpoints are accessible without a token. All other paths require 
 
 ## Error Response Format
 
-When a request cannot be fulfilled, the API returns a JSON body with a `status` code, a human-readable `message`, and a Unix-millisecond `timestamp`. The HTTP status code in the response line always matches the `status` field.
+When a request cannot be fulfilled, the API returns a JSON body with an `error` string describing what went wrong, and a Unix-millisecond `timestamp`. The HTTP status code in the response line reflects the failure type.
 
 ```json
 {
-  "status": 401,
-  "message": "User not found. Please check your username/email and try again.",
+  "error": "User not found. Please check your username/email and try again.",
   "timestamp": 1718000000000
 }
 ```
 
 <Note>
-  Some error responses also include extra context fields such as `emailVerified` or `email` to help the client decide the next action — for example, prompting the user to verify their inbox when the account exists but is unverified.
+  Some error responses include extra context fields alongside `error` and `timestamp` to help the client decide the next action — for example, `emailVerified: false` and `email` when an account exists but has not been verified.
 </Note>
 
 Common status codes returned by the API:

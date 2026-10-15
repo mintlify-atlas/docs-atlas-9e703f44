@@ -1,7 +1,7 @@
 ---
 title: "Docker Compose Deployment for Local and Demo Environments"
 sidebarTitle: "Docker Compose"
-description: "Spin up the full 4-service Examwizards stack — MySQL, Spring Boot API, Gemini chatbot, and React SPA — on a single bridge network for local dev and demos."
+description: "Run the full Examwizards stack locally with one command — MySQL 8, Spring Boot API, Gemini chatbot, and React SPA sharing a single bridge network."
 ---
 
 Docker Compose gives you a reproducible, single-command local environment that mirrors the shape of production without requiring any cloud account. All four services — the MySQL 8 database, the Spring Boot API, the Node-based Gemini chatbot, and the Vite/nginx React frontend — share a single `examport-network` bridge, so inter-service DNS resolution works exactly as it does in ECS service discovery. Use this setup for day-to-day development, integration testing, or stakeholder demos.
@@ -72,6 +72,9 @@ services:
       RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET}
       EMAIL_USERNAME: ${EMAIL_USERNAME}
       EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      EMAIL_FROM: ${EMAIL_FROM}
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-true}
+      EMAIL_ADMIN: ${EMAIL_ADMIN}
     ports:
       - "8080:8080"
     depends_on:

@@ -1,7 +1,7 @@
 ---
 title: "Results API: Retrieve Exam Scores and Performance Data"
 sidebarTitle: "Results"
-description: "Reference for all /api/results endpoints: fetching a student's own submission history, retrieving per-exam aggregates for instructors, and looking up individual result records."
+description: "Reference for all /api/results endpoints: a student's own submission history, per-exam aggregates for instructors, and individual result record lookup."
 ---
 
 The Results API surfaces everything that happens after a student clicks submit. Every result record stores the raw score, a pass/fail flag, time taken, per-question answer snapshot, auto-generated feedback, and a computed letter grade. Students can only access their own results; instructors can view the full submission list for any exam in their courses. Responses are pre-enriched with exam and user context so the frontend never needs a second request.

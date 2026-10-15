@@ -1,7 +1,7 @@
 ---
 title: "Courses API: Create, List, and Manage Course Endpoints"
 sidebarTitle: "Courses"
-description: "Full reference for all /api/courses endpoints including course creation with CSV access lists, public listing, enrollment, Razorpay payment initiation, and instructor management."
+description: "Full reference for /api/courses: create with CSV access lists, browse public catalogue, enroll, pay via Razorpay, and manage your instructor courses."
 ---
 
 The Courses API powers the full lifecycle of learning content on Examwizards — from an unauthenticated visitor browsing the catalogue to an instructor publishing a private paid course with a curated student list. Courses have two visibility states (`PUBLIC` / `PRIVATE`) and two pricing modes (`FREE` / `PAID`). Private courses require an uploaded CSV of allowed email addresses; public paid courses use Razorpay for payment and auto-enroll on verified payment.
@@ -230,7 +230,19 @@ Checks whether the authenticated user has access to a specific course. For publi
   `true` if the user may view and take exams in this course.
 </ResponseField>
 <ResponseField name="accessType" type="string">
-  `"enrolled"`, `"allowed_email"`, or `"none"`.
+  `"enrolled"` when the user holds an active enrollment, `"allowed"` when their email is in the private-course access list but they are not yet enrolled, or `"none"` when access is denied.
+</ResponseField>
+<ResponseField name="courseId" type="number">
+  The queried course ID.
+</ResponseField>
+<ResponseField name="courseName" type="string">
+  Name of the course.
+</ResponseField>
+<ResponseField name="visibility" type="string">
+  `"PUBLIC"` or `"PRIVATE"`.
+</ResponseField>
+<ResponseField name="pricing" type="string">
+  `"FREE"` or `"PAID"`.
 </ResponseField>
 
 ```bash
@@ -299,14 +311,14 @@ Verifies a completed Razorpay payment using HMAC-SHA256 signature validation and
 
 **Auth**: Bearer JWT — STUDENT role required.
 
-<ParamField body="razorpay_order_id" type="string" required>
-  The `orderId` returned by `/purchase`.
+<ParamField body="orderId" type="string" required>
+  The Razorpay order ID returned by `POST /api/courses/{courseId}/purchase`.
 </ParamField>
-<ParamField body="razorpay_payment_id" type="string" required>
-  The `paymentId` returned by the Razorpay checkout callback.
+<ParamField body="paymentId" type="string" required>
+  The Razorpay payment ID returned by the Razorpay checkout callback.
 </ParamField>
-<ParamField body="razorpay_signature" type="string" required>
-  HMAC-SHA256 signature from the Razorpay callback payload.
+<ParamField body="signature" type="string" required>
+  HMAC-SHA256 signature from the Razorpay callback payload, used to verify authenticity.
 </ParamField>
 <ParamField body="courseId" type="number" required>
   The numeric ID of the course being purchased.
@@ -338,9 +350,9 @@ curl -X POST http://localhost:8080/api/courses/payment/verify \
   -H 'Authorization: Bearer <token>' \
   -H 'Content-Type: application/json' \
   -d '{
-    "razorpay_order_id": "order_ABC123",
-    "razorpay_payment_id": "pay_XYZ789",
-    "razorpay_signature": "hmac_sig_value",
+    "orderId": "order_ABC123",
+    "paymentId": "pay_XYZ789",
+    "signature": "hmac_sig_value",
     "courseId": 42
   }'
 ```

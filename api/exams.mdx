@@ -1,7 +1,7 @@
 ---
 title: "Exams API: Create, Schedule, and Submit Exam Endpoints"
 sidebarTitle: "Exams"
-description: "Full reference for all /api/exams and /api/questions endpoints covering exam CRUD, access control, student exam listing, auto-graded submission, and question management."
+description: "Full reference for /api/exams and /api/questions: exam CRUD, access control, student exam listing, auto-graded MCQ submission, and question management."
 ---
 
 The Exams API lets instructors create and schedule timed assessments attached to courses, and lets students discover, access, and submit them. Exams carry a start/end date-time window that drives a computed `status` field (`upcoming`, `active`, `completed`). Submission auto-grades MCQ questions and dispatches a result email to the student. The companion Questions API provides fine-grained CRUD over individual question records.
@@ -12,7 +12,7 @@ The Exams API lets instructors create and schedule timed assessments attached to
 
 Returns every exam in the system as a flat list with questions embedded. Primarily used internally; prefer the scoped endpoints below for production UI flows.
 
-**Auth**: Bearer JWT — any authenticated role.
+**Auth**: Bearer JWT — ADMIN, INSTRUCTOR, or STUDENT role required.
 
 **Response** `200 OK` — array of `Exam` entities.
 
@@ -43,7 +43,7 @@ curl http://localhost:8080/api/exams \
 
 Creates a new exam. The exam must be linked to an existing course via `course.id`. Questions can be embedded inline in the same request.
 
-**Auth**: Bearer JWT — any authenticated role (instructors only in practice).
+**Auth**: Bearer JWT — ADMIN, INSTRUCTOR, or STUDENT role required (instructors only in practice).
 
 <ParamField body="title" type="string" required>
   Exam title shown to students.
@@ -366,6 +366,12 @@ Submits the student's answers for auto-grading. MCQ answers are matched against 
 </ResponseField>
 <ResponseField name="answered_questions" type="number">
   Number of questions the student actually answered.
+</ResponseField>
+<ResponseField name="completion_percentage" type="number">
+  Percentage of questions answered (answered / total × 100), rounded to the nearest integer.
+</ResponseField>
+<ResponseField name="time_taken" type="number">
+  Seconds the student spent on the exam (echoed from the request).
 </ResponseField>
 <ResponseField name="feedback" type="string">
   Auto-generated feedback string based on percentage band.

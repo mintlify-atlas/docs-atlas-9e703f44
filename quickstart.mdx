@@ -1,5 +1,5 @@
 ---
-title: "Get Examwizards Running Locally in 5 Minutes"
+title: "Run Examwizards Locally with Docker Compose in Minutes"
 sidebarTitle: "Quickstart"
 description: "Clone, configure, and run all four Examwizards services — MySQL, Spring Boot API, Gemini chatbot, and React SPA — locally with one Docker Compose command."
 ---
@@ -88,6 +88,10 @@ Open `.env` in your editor and fill in every value. The table below explains eac
 | `EW_BOOTSTRAP_ADMIN_PASSWORD` | *(secure password)* | Password for the bootstrap admin. Change this immediately after first login. |
 | `EW_BOOTSTRAP_ADMIN_USERNAME` | `admin` | Username for the bootstrap admin. |
 
+<Warning>
+`DefaultAdminBootstrap` reads `EW_BOOTSTRAP_ADMIN_*` using Spring's `@Value` injection. When running with Docker Compose, these three variables must be exported in your **shell environment** before running `docker compose up -d` — they are not automatically forwarded from the `.env` file to the backend container because they are not listed in the `environment:` section of `docker-compose.yml`. Export them first: `export EW_BOOTSTRAP_ADMIN_EMAIL=admin@example.com` (and the other two), then start Compose.
+</Warning>
+
 **Frontend build-time (Vite)**
 
 | Variable | Example value | Purpose |
@@ -112,7 +116,7 @@ Compose starts four services in dependency order:
 | Service | Container | Port | Description |
 |---|---|---|---|
 | `mysql` | `examport-mysql` | `3306` | MySQL 8.0 with the `examwizards` database. A named volume (`mysql-data`) persists data between restarts. The backend waits for a healthy `mysqladmin ping` before starting. |
-| `backend` | `examport-backend` | `8080` | Spring Boot 2.7 API. Hibernate creates or updates tables on startup (`ddl-auto`). Application logs are written to the `backend-logs` volume. |
+| `backend` | `examport-backend` | `8080` | Spring Boot 2.7 API. Hibernate validates the schema on startup (`ddl-auto=validate`). Application logs are written to the `backend-logs` volume. |
 | `chatbot` | `examport-chatbot` | `5000` | Node.js + Express microservice powered by Google Gemini. Exposes `POST /api/ask` and `GET /health`. |
 | `frontend` | `examport-frontend` | `3000` | React 18 SPA served by the container. Built with `VITE_API_BASE_URL=http://localhost:8080/api` and `VITE_CHATBOT_API_URL=http://localhost:5000`. |
 

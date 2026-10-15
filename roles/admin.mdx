@@ -1,7 +1,7 @@
 ---
 title: "Admin Role: Platform Management and User Oversight"
 sidebarTitle: "Admin"
-description: "Explains how the admin account is bootstrapped, what the admin dashboard reports, and how admins manage users, moderate reviews, and respond to contact requests across the platform."
+description: "How the admin account is bootstrapped, what the admin dashboard reports, and how admins manage users, moderate reviews, and handle contact messages."
 ---
 
 The admin role has full visibility across the Examwizards platform. Admins can inspect platform-wide statistics, manage all registered users (including hard-deleting accounts with cascade safety), moderate student and instructor reviews before they appear publicly, and respond to contact messages submitted through the platform's contact form. Unlike students and instructors, admin accounts are never self-registered — they are created by the platform at first startup using environment variables.
@@ -88,7 +88,7 @@ GET /api/admin/users
 Authorization: Bearer <token>
 ```
 
-Returns an array of user objects, each containing `id`, `username`, `email`, `role`, `fullName`, `phoneNumber`, and `status` (`"active"` for email-verified accounts, `"inactive"` otherwise).
+Returns an array of user objects, each containing `id`, `username`, `email`, `role`, `fullName`, `phoneNumber`, `status` (`"active"` for email-verified accounts, `"inactive"` otherwise), and `createdAt`.
 
 ### User statistics
 

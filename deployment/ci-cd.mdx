@@ -1,7 +1,7 @@
 ---
 title: "CI/CD: GitHub Actions and Jenkins Pipeline Configuration"
 sidebarTitle: "CI/CD"
-description: "Configure the GitHub Actions pipeline for Maven, Vite, and Terraform validate jobs, plus the optional Jenkins gate for image builds, registry push, and manual promotion."
+description: "Set up GitHub Actions jobs for Maven, Vite, and Terraform validation, plus the Jenkins pipeline for image builds, registry push, and manual promotion."
 ---
 
 Examwizards uses two complementary CI systems: **GitHub Actions** as the primary pipeline that runs on every push and pull request to `main`/`master`, and an optional **Jenkins** pipeline that acts as an enterprise gate for building and promoting container images to a registry. Actions handles build verification and Terraform validation; Jenkins owns image construction, security scanning hooks, and the manual approval step before production promotion.
@@ -186,12 +186,18 @@ The Jenkinsfile provides an optional enterprise gate for building Docker images 
         }
         steps {
             dir('backend') {
-                sh './mvnw -B verify -DskipTests'
+                script {
+                    if (isUnix()) {
+                        sh './mvnw -B verify -DskipTests'
+                    } else {
+                        bat 'mvnw.cmd -B verify -DskipTests'
+                    }
+                }
             }
         }
     }
     ```
-    Skipped when `SKIP_TESTS` is `true`. Uses the Maven wrapper for consistent toolchain behaviour across agents.
+    Skipped when `SKIP_TESTS` is `true`. The `isUnix()` guard lets the same Jenkinsfile run on both Linux and Windows agents; `mvnw.cmd` is used on Windows.
   </Step>
 
   <Step title="Chatbot verify">
@@ -199,15 +205,22 @@ The Jenkinsfile provides an optional enterprise gate for building Docker images 
     stage('Chatbot verify') {
         steps {
             dir('chatbot') {
-                sh '''
-                    npm ci
-                    node --check server.js
-                '''
+                script {
+                    if (isUnix()) {
+                        sh '''
+                            npm ci
+                            node --check server.js
+                        '''
+                    } else {
+                        bat 'npm ci'
+                        bat 'node --check server.js'
+                    }
+                }
             }
         }
     }
     ```
-    Mirrors the GitHub Actions chatbot job — installs production deps and performs a syntax-only check.
+    Mirrors the GitHub Actions chatbot job — installs production deps and performs a syntax-only check. The `isUnix()` guard supports both Linux and Windows agents.
   </Step>
 
   <Step title="Build API image">
